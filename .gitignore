@@ -170,3 +170,5 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 pyccxt/_version.py
+
+.serena/

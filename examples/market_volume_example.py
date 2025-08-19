@@ -1,8 +1,8 @@
 """
-Example usage of the MarketVolume class to fetch and display market volumes.
+Example usage of the Exchange class to fetch and display market volumes.
 
 This example shows how to:
-1. Initialize the MarketVolume class
+1. Initialize the Exchange class
 2. Fetch market volumes from multiple exchanges
 3. Display the top markets by volume
 4. Show the total volume and breakdown by currency
@@ -17,7 +17,7 @@ import ccxt
 # Add the parent directory to sys.path for imports when running as a script
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from pyccxt.market_volume import MarketVolume
+from pyccxt.exchange import Exchange
 
 
 def display_volumes_for_exchange(market_name="binance", limit=10, min_volume=0):
@@ -27,14 +27,14 @@ def display_volumes_for_exchange(market_name="binance", limit=10, min_volume=0):
     Args:
         market_name: The exchange to use (default: "binance")
         limit: Maximum number of markets to display (default: 10)
-        min_volume: Minimum BTC volume for filtering markets (default: 0)
+        min_volume: Minimum base volume for filtering markets (default: 0)
     """
-    # Initialize MarketVolume
+    # Initialize Exchange
     print(f"Fetching market volumes from {market_name}...")
-    market_volume = MarketVolume(market=market_name)
+    exchange = Exchange(market_name)
 
     # Get volumes
-    volumes = market_volume.get_volumes(limit=limit, min_volume=min_volume)
+    volumes = exchange.get_market_volumes(min_volume=min_volume, limit=limit)
 
     if not volumes:
         print(f"No volume data available for {market_name}")
@@ -44,7 +44,8 @@ def display_volumes_for_exchange(market_name="binance", limit=10, min_volume=0):
     print(f"\nTop {len(volumes)} markets by volume on {market_name.capitalize()}:")
     print("=" * 80)
     print(
-        f"{'Symbol':<12} {'Base Vol':<15} {'Quote Vol':<20} {'BTC Vol':<15} {'Price':<15}"
+        f"{'Symbol':<12} {'Base Vol':<15} {'Quote Vol':<20} "
+        f"{'Norm Vol':<15} {'Price':<15}"
     )
     print("-" * 80)
 
@@ -53,43 +54,54 @@ def display_volumes_for_exchange(market_name="binance", limit=10, min_volume=0):
         # Format volumes with appropriate precision
         base_vol = (
             f"{v['baseVolume']:,.2f}"
-            if v["baseVolume"] >= 1
+            if v["baseVolume"] and v["baseVolume"] >= 1
             else f"{v['baseVolume']:.8f}"
+            if v["baseVolume"]
+            else "0"
         )
         quote_vol = (
             f"{v['quoteVolume']:,.2f}"
-            if v["quoteVolume"] >= 1
+            if v["quoteVolume"] and v["quoteVolume"] >= 1
             else f"{v['quoteVolume']:.8f}"
+            if v["quoteVolume"]
+            else "0"
         )
-        btc_vol = (
-            f"{v['volume']:,.2f}" if v["volume"] >= 1 else f"{v['volume']:.8f}"
+        norm_vol = (
+            f"{v.get('normalizedVolume', 0):,.2f}"
+            if v.get("normalizedVolume", 0) >= 1
+            else f"{v.get('normalizedVolume', 0):.8f}"
         )
-        price = f"{v['price']:,.2f}" if v["price"] >= 1 else f"{v['price']:.8f}"
+        price = (
+            f"{v['price']:,.2f}"
+            if v["price"] and v["price"] >= 1
+            else f"{v['price']:.8f}"
+            if v["price"]
+            else "N/A"
+        )
 
         print(
-            f"{v['symbol']:<12} {base_vol:<15} {quote_vol:<20} {btc_vol:<15} {price:<15}"
+            f"{v['symbol']:<12} {base_vol:<15} {quote_vol:<20} "
+            f"{norm_vol:<15} {price:<15}"
         )
 
     # Display total volume
-    total_volume = market_volume.get_total_volume()
+    total_volume = exchange.get_total_volume()
     print("\nTotal Volume Statistics:")
-    print(f"Total BTC Volume: {total_volume:,.2f} BTC")
+    print(f"Total Normalized Volume: {total_volume:,.2f}")
 
     # Display volume by quote currency
-    quote_volumes = market_volume.get_volume_by_quote_currency()
+    quote_volumes = exchange.get_volume_by_quote_currency()
     print("\nVolume by Quote Currency:")
     for quote, volume in list(quote_volumes.items())[:5]:  # Show top 5
-        print(f"{quote:<8}: {volume:,.2f} BTC ({volume / total_volume * 100:.2f}%)")
+        print(
+            f"{quote:<8}: {volume:,.2f} ({volume / total_volume * 100:.2f}%)"
+            if total_volume > 0
+            else f"{quote:<8}: {volume:,.2f}"
+        )
 
-    # Display volume by base currency
-    base_volumes = market_volume.get_volume_by_base_currency()
-    print("\nVolume by Base Currency:")
-    for base, volume in list(base_volumes.items())[:5]:  # Show top 5
-        print(f"{base:<8}: {volume:,.2f} BTC ({volume / total_volume * 100:.2f}%)")
-
-    # Display timestamp
-    timestamp = market_volume.get_timestamp()
-    print(f"\nLast updated: {timestamp}")
+    # Display exchange info
+    exchange_info = exchange.get_exchange_info()
+    print(f"\nLast updated: {exchange_info.get('last_update', 'N/A')}")
 
     return {"exchange": market_name, "total_volume": total_volume, "volumes": volumes}
 
@@ -104,7 +116,8 @@ def display_volumes_multi_exchange(
         exchanges: List of exchanges to use (default: None, which uses top 5 exchanges)
         limit: Maximum number of markets to display per exchange (default: 10)
         min_volume: Minimum BTC volume for filtering markets (default: 0)
-        top_exchanges: Number of top exchanges to use if no exchanges are specified (default: 5)
+        top_exchanges: Number of top exchanges to use if no exchanges are
+                       specified (default: 5)
     """
     if exchanges is None:
         # Get all available exchanges
@@ -153,7 +166,8 @@ def display_volumes_multi_exchange(
         print("-" * 40)
         for result in exchange_results:
             print(
-                f"{result['exchange'].capitalize():<15} {result['total_volume']:>20,.2f}"
+                f"{result['exchange'].capitalize():<15} "
+                f"{result['total_volume']:>20,.2f}"
             )
 
     print("\nCompleted fetching data from all specified exchanges.")
@@ -166,7 +180,8 @@ if __name__ == "__main__":
         "-m",
         type=str,
         default=None,
-        help="Exchange to fetch data from (default: None, which uses multiple exchanges)",
+        help="Exchange to fetch data from (default: None, which uses "
+        "multiple exchanges)",
     )
     parser.add_argument(
         "--exchanges",
@@ -187,14 +202,15 @@ if __name__ == "__main__":
         "-v",
         type=float,
         default=0,
-        help="Minimum BTC volume to include (default: 0)",
+        help="Minimum volume to include (default: 0)",
     )
     parser.add_argument(
         "--top-exchanges",
         "-t",
         type=int,
         default=5,
-        help="Number of top exchanges to use if no exchanges are specified (default: 5)",
+        help="Number of top exchanges to use if no exchanges are "
+        "specified (default: 5)",
     )
     parser.add_argument(
         "--list-exchanges",

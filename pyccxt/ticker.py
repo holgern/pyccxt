@@ -31,6 +31,39 @@ class Ticker:
         self.baseVolume: Optional[float] = None
         self.quoteVolume: Optional[float] = None
 
+    def __repr__(self) -> str:
+        """
+        Return a string representation of the Ticker instance.
+
+        Returns:
+            str: String representation showing symbol, last price, change percentage,
+                and datetime
+        """
+        last_str = f"{self.last:.8f}" if self.last is not None else "N/A"
+        change_str = (
+            f"{self.percentage:+.2f}%" if self.percentage is not None else "N/A"
+        )
+
+        # Show datetime if available, otherwise show timestamp
+        time_str = ""
+        if self.datetime:
+            # Extract just the time part for brevity
+            if "T" in self.datetime:
+                time_part = self.datetime.split("T")[1].split(".")[
+                    0
+                ]  # Remove milliseconds
+                time_str = f", time={time_part}"
+        elif self.timestamp:
+            from datetime import datetime, timezone
+
+            dt = datetime.fromtimestamp(self.timestamp / 1000, tz=timezone.utc)
+            time_str = f", time={dt.strftime('%H:%M:%S')}"
+
+        return (
+            f"Ticker(symbol='{self.symbol}', last={last_str}, "
+            f"change={change_str}{time_str})"
+        )
+
     @classmethod
     def from_ccxt(cls, ccxt_ticker: dict[str, Any]) -> "Ticker":
         """
@@ -42,10 +75,23 @@ class Ticker:
         Returns:
             A new Ticker instance populated with data from the CCXT response
         """
+        import time
+        from datetime import datetime, timezone
+
         ticker = cls(ccxt_ticker.get("symbol", ""))
         ticker.info = ccxt_ticker.get("info", {})
+
+        # Use provided timestamp, or current time if exchange doesn't provide one
         ticker.timestamp = ccxt_ticker.get("timestamp")
+        if ticker.timestamp is None:
+            ticker.timestamp = int(time.time() * 1000)  # CCXT uses milliseconds
+
         ticker.datetime = ccxt_ticker.get("datetime")
+        if ticker.datetime is None and ticker.timestamp is not None:
+            # Convert timestamp to ISO datetime string
+            dt = datetime.fromtimestamp(ticker.timestamp / 1000, tz=timezone.utc)
+            ticker.datetime = dt.isoformat()
+
         ticker.high = ccxt_ticker.get("high")
         ticker.low = ccxt_ticker.get("low")
         ticker.bid = ccxt_ticker.get("bid")

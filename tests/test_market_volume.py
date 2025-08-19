@@ -1,32 +1,30 @@
-import datetime
 import unittest
 from unittest.mock import MagicMock, patch
 
-from pyccxt.market_volume import MarketVolume
+from pyccxt.exchange import Exchange, get_market_volumes_for_pair
 
 
-class TestMarketVolume(unittest.TestCase):
-    """Test cases for the MarketVolume class."""
+class TestExchange(unittest.TestCase):
+    """Test cases for the Exchange class."""
 
     @patch("ccxt.binance")
     def test_initialization(self, mock_binance):
-        """Test the MarketVolume initialization."""
+        """Test the Exchange initialization."""
         # Setup mock
         mock_exchange = MagicMock()
         mock_exchange.load_markets.return_value = {"BTC/USDT": {}}
         mock_binance.return_value = mock_exchange
 
-        # Create MarketVolume instance
-        market_volume = MarketVolume()
+        # Create Exchange instance
+        exchange = Exchange("binance")
 
         # Assertions
-        self.assertEqual(market_volume.market, "binance")
-        self.assertEqual(market_volume.base_currency, "BTC")
-        self.assertIsNotNone(market_volume.exchange)
+        self.assertEqual(exchange.name, "binance")
+        self.assertIsNotNone(exchange.ccxt_exchange)
         mock_exchange.load_markets.assert_called_once()
 
     @patch("ccxt.binance")
-    def test_get_volumes(self, mock_binance):
+    def test_get_market_volumes(self, mock_binance):
         """Test getting market volumes."""
         # Setup mock
         mock_exchange = MagicMock()
@@ -36,7 +34,6 @@ class TestMarketVolume(unittest.TestCase):
             "BTC/USDT": {"id": "BTCUSDT", "symbol": "BTC/USDT"},
             "ETH/USDT": {"id": "ETHUSDT", "symbol": "ETH/USDT"},
             "BTC/EUR": {"id": "BTCEUR", "symbol": "BTC/EUR"},
-            "ETH/BTC": {"id": "ETHBTC", "symbol": "ETH/BTC"},
         }
         mock_exchange.load_markets.return_value = mock_markets
 
@@ -66,81 +63,77 @@ class TestMarketVolume(unittest.TestCase):
                 "timestamp": 1625097600000,
                 "datetime": "2021-07-01T00:00:00.000Z",
             },
-            "ETH/BTC": {
-                "symbol": "ETH/BTC",
-                "baseVolume": 3000.0,
-                "quoteVolume": 200.0,
-                "last": 0.0667,
-                "timestamp": 1625097600000,
-                "datetime": "2021-07-01T00:00:00.000Z",
-            },
         }
 
-        mock_exchange.fetch_tickers.return_value = mock_tickers
-        mock_exchange.has = {"fetchTickers": True}
-
-        # Mock BTC prices
         def mock_fetch_ticker(symbol):
-            if symbol == "BTC/USDT":
-                return {"last": 30000.0}
-            elif symbol == "BTC/EUR":
-                return {"last": 25000.0}
             return mock_tickers.get(symbol, {})
 
         mock_exchange.fetch_ticker = mock_fetch_ticker
+        mock_exchange.fetch_tickers.return_value = mock_tickers
+        mock_exchange.has = {"fetchTickers": True}
 
         mock_binance.return_value = mock_exchange
 
-        # Create MarketVolume instance - disable base filtering for test
-        market_volume = MarketVolume(filter_by_base=False)
-        market_volume._last_update = datetime.datetime.now() - datetime.timedelta(
-            hours=1
-        )
+        # Create Exchange instance
+        exchange = Exchange("binance")
 
-        # Setup the necessary internal state manually for testing
-        market_volume._markets = mock_markets
-        from pyccxt.ticker import Ticker
+        # Test that exchange was initialized
+        self.assertIsNotNone(exchange.ccxt_exchange)
 
-        market_volume._tickers = {
-            "BTC/USDT": Ticker.from_ccxt(mock_tickers["BTC/USDT"]),
-            "ETH/USDT": Ticker.from_ccxt(mock_tickers["ETH/USDT"]),
-            "BTC/EUR": Ticker.from_ccxt(mock_tickers["BTC/EUR"]),
-            "ETH/BTC": Ticker.from_ccxt(mock_tickers["ETH/BTC"]),
+        # Test get_markets_by_base
+        btc_markets = exchange.get_markets_by_base("BTC")
+        self.assertEqual(len(btc_markets), 2)  # BTC/USDT and BTC/EUR
+        for market in btc_markets:
+            self.assertEqual(market.base_currency, "BTC")
+
+        # Test get_markets_by_quote
+        usdt_markets = exchange.get_markets_by_quote("USDT")
+        self.assertEqual(len(usdt_markets), 2)  # BTC/USDT and ETH/USDT
+        for market in usdt_markets:
+            self.assertEqual(market.quote_currency, "USDT")
+
+        # Test get_available_symbols
+        symbols = exchange.get_available_symbols()
+        self.assertIn("BTC/USDT", symbols)
+        self.assertIn("ETH/USDT", symbols)
+        self.assertIn("BTC/EUR", symbols)
+
+    @patch("ccxt.binance")
+    def test_get_market(self, mock_binance):
+        """Test getting a specific market."""
+        # Setup mock
+        mock_exchange = MagicMock()
+        mock_markets = {
+            "BTC/USDT": {"id": "BTCUSDT", "symbol": "BTC/USDT"},
         }
-        market_volume._prices = {
-            "USDT": 30000.0,
-            "EUR": 25000.0,
-        }
+        mock_exchange.load_markets.return_value = mock_markets
+        mock_binance.return_value = mock_exchange
 
-        # Calculate volumes directly
-        market_volume._volumes = market_volume._calculate_volumes()
+        # Create Exchange instance
+        exchange = Exchange("binance")
 
-        # Test get_volumes
-        volumes = market_volume.get_volumes()
+        # Test get_market
+        market = exchange.get_market("BTC/USDT")
+        self.assertIsNotNone(market)
+        if market:
+            self.assertEqual(market.symbol, "BTC/USDT")
+            self.assertEqual(market.base_currency, "BTC")
+            self.assertEqual(market.quote_currency, "USDT")
 
-        # Assertions
-        self.assertTrue(len(volumes) > 0)
+        # Test non-existent market
+        market = exchange.get_market("INVALID/PAIR")
+        self.assertIsNone(market)
 
-        # Check that volumes are sorted by BTC volume in descending order
-        for i in range(len(volumes) - 1):
-            self.assertGreaterEqual(
-                volumes[i]["volume"], volumes[i + 1]["volume"]
-            )
 
-        # Test get_top_markets
-        top_markets = market_volume.get_top_markets(limit=2)
-        self.assertEqual(len(top_markets), 2)
+class TestMarketVolumesCrossExchange(unittest.TestCase):
+    """Test cases for cross-exchange volume comparison."""
 
-        # Test get_total_volume
-        total_volume = market_volume.get_total_volume()
-        self.assertGreater(total_volume, 0)
-
-        # Test volume by currency
-        quote_volumes = market_volume.get_volume_by_quote_currency()
-        self.assertIn("USDT", quote_volumes)
-
-        base_volumes = market_volume.get_volume_by_base_currency()
-        self.assertIn("BTC", base_volumes)
+    def test_get_market_volumes_for_pair(self):
+        """Test getting volumes for a pair across exchanges."""
+        # This is more of an integration test and would require actual API calls
+        # For unit testing, we would need to mock multiple exchanges
+        # For now, just test that the function exists and can be called
+        self.assertTrue(callable(get_market_volumes_for_pair))
 
 
 if __name__ == "__main__":

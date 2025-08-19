@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 import logging
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Any
 
 import ccxt
 
@@ -11,13 +13,23 @@ class Exchanges:
     Class for retrieving and processing exchange information from ccxt.
     """
 
+    def __repr__(self) -> str:
+        """
+        Return a string representation of the Exchanges class.
+
+        Returns:
+            str: String representation showing available exchange count
+        """
+        exchange_count = len(self.get_all_exchanges())
+        return f"Exchanges(available_exchanges={exchange_count})"
+
     @staticmethod
-    def get_all_exchanges() -> List[str]:
+    def get_all_exchanges() -> list[str]:
         """
         Get a list of all available exchange IDs.
 
         Returns:
-            List[str]: List of exchange IDs
+            list[str]: List of exchange IDs
         """
         return ccxt.exchanges
 
@@ -37,11 +49,11 @@ class Exchanges:
         """
         try:
             return getattr(ccxt, exchange_id)()
-        except AttributeError:
-            raise AttributeError(f"Exchange '{exchange_id}' not found")
+        except AttributeError as err:
+            raise AttributeError(f"Exchange '{exchange_id}' not found") from err
 
     @staticmethod
-    def get_exchange_features(exchange: ccxt.Exchange) -> Dict[str, Any]:
+    def get_exchange_features(exchange: ccxt.Exchange) -> dict[str, Any]:
         """
         Get features supported by an exchange.
 
@@ -49,14 +61,14 @@ class Exchanges:
             exchange: Exchange instance
 
         Returns:
-            Dict[str, Any]: Dictionary of features
+            dict[str, Any]: Dictionary of features
         """
         return exchange.has
 
     @staticmethod
     def filter_exchanges_by_features(
-        exchanges: List[str], features: List[str]
-    ) -> List[str]:
+        exchanges: list[str], features: list[str]
+    ) -> list[str]:
         """
         Filter exchanges based on supported features.
 
@@ -65,7 +77,7 @@ class Exchanges:
             features: List of features that exchanges must support
 
         Returns:
-            List[str]: Filtered list of exchange IDs
+            list[str]: Filtered list of exchange IDs
         """
         filtered_exchanges = []
 
@@ -91,10 +103,10 @@ class Exchanges:
 
     @staticmethod
     def filter_exchanges_by_market(
-        exchanges: List[str],
-        base_currency: Optional[str] = None,
-        quote_currency: Optional[str] = None,
-    ) -> Tuple[List[str], Dict[str, List[str]]]:
+        exchanges: list[str],
+        base_currency: str | None = None,
+        quote_currency: str | None = None,
+    ) -> tuple[list[str], dict[str, list[str]]]:
         """
         Filter exchanges based on supported markets.
 
@@ -104,7 +116,7 @@ class Exchanges:
             quote_currency: Quote currency to filter by
 
         Returns:
-            Tuple[List[str], Dict[str, List[str]]]:
+            tuple[list[str], dict[str, list[str]]]:
                 - Filtered list of exchange IDs
                 - Dictionary mapping exchange IDs to lists of matching market symbols
         """
@@ -121,7 +133,7 @@ class Exchanges:
 
                 # Check if markets match the criteria
                 matching_pairs = []
-                for symbol, market in markets.items():
+                for _symbol, market in markets.items():
                     # Filter by base currency if specified
                     if base_currency and market.get("base") != base_currency.upper():
                         continue
@@ -131,7 +143,7 @@ class Exchanges:
                         continue
 
                     # If we got here, the market matches the criteria
-                    matching_pairs.append(symbol)
+                    matching_pairs.append(_symbol)
 
                 # If we found matching pairs, include this exchange
                 if matching_pairs:
@@ -147,11 +159,11 @@ class Exchanges:
     @staticmethod
     def get_exchange_markets(
         exchange_id: str,
-        base_currency: Optional[str] = None,
-        quote_currency: Optional[str] = None,
+        base_currency: str | None = None,
+        quote_currency: str | None = None,
         active_only: bool = False,
         sort_by: str = "symbol",
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Get markets for a specific exchange with optional filtering.
 
@@ -163,7 +175,7 @@ class Exchanges:
             sort_by: Field to sort by (symbol, base, quote, volume, active)
 
         Returns:
-            List[Dict[str, Any]]: List of market dictionaries
+            list[dict[str, Any]]: List of market dictionaries
         """
         try:
             # Create an instance of the exchange
@@ -174,7 +186,7 @@ class Exchanges:
 
             # Filter markets
             filtered_markets = []
-            for symbol, market in markets.items():
+            for _symbol, market in markets.items():
                 # Skip inactive markets if active_only is True
                 if active_only and not market.get("active", True):
                     continue

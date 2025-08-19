@@ -1,20 +1,22 @@
-import logging
-from typing import Optional, List
+from __future__ import annotations
 
-import ccxt
+import logging
+
 import typer
 from rich.console import Console
 from rich.table import Table
 
-from .market_volume import MarketVolume
+from .exchanges import Exchanges
 from .price_by_market import PriceByMarket
-from pyccxt.exchanges import Exchanges
+
+# Exchange is now an alias for PriceByMarket with enhanced functionality
+Exchange = PriceByMarket
 
 log = logging.getLogger(__name__)
 app = typer.Typer()
 console = Console()
 
-state = {"verbose": 3}
+state = {"verbose": 3, "market": "kraken"}
 
 
 @app.command()
@@ -23,24 +25,100 @@ def price(
     quote: str = typer.Argument(..., help="Quote Currency symbol (e.g., USD, EUR)"),
     market: str = typer.Option(None, "--market", "-m", help="Exchange to use"),
 ):
-    p = PriceByMarket(
-        market=market if market else state["market"],
-        base_currency=base,
-        quote_currency=quote,
-        enable_ohlc=False,
-    )
-    p.refresh()
-    price_data = p.price
+    """Get the current price for a trading pair on an exchange."""
+    try:
+        # Use the Exchange class to get market data
+        exchange_name = market if market else state["market"]
+        exchange_obj = Exchange(exchange_name=exchange_name)
 
-    # Display more informative output
-    console.print("[bold]Price[/bold]")
-    console.print(f"Market: [green]{price_data['market']}[/green]")
-    console.print(
-        f"Time: [cyan]{price_data['timestamp'].strftime('%Y-%m-%d %H:%M:%S UTC')}[/cyan]"
-    )
-    console.print(
-        f"Price ({base.upper()}/{quote.upper()}): [yellow]{price_data['price']:,.2f}[/yellow]"
-    )
+        # Get the market for the specific trading pair
+        trading_pair = f"{base.upper()}/{quote.upper()}"
+        market_obj = exchange_obj.get_market(trading_pair)
+
+        if market_obj is None:
+            console.print(
+                f"[bold red]Error: Trading pair {trading_pair} not found on "
+                f"{exchange_name}[/bold red]"
+            )
+            console.print("Try using the 'markets' command to see available pairs:")
+            console.print(
+                f"  pyccxt markets {exchange_name} --base {base.upper()} "
+                f"--quote {quote.upper()}"
+            )
+            return
+
+        # Refresh to get latest ticker data
+        success = market_obj.refresh()
+        if not success:
+            console.print(
+                f"[bold red]Error: Could not refresh market data for {trading_pair} "
+                f"on {exchange_name}[/bold red]"
+            )
+            return
+
+        ticker = market_obj.get_ticker()
+
+        if ticker is None:
+            console.print(
+                f"[bold red]Error: Could not fetch price for {trading_pair} "
+                f"on {exchange_name}[/bold red]"
+            )
+            return
+
+        # Convert timestamp to datetime for display
+        timestamp_str = "N/A"
+        if ticker.timestamp:
+            from datetime import datetime, timezone
+
+            dt = datetime.fromtimestamp(ticker.timestamp / 1000, tz=timezone.utc)
+            timestamp_str = dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+        elif ticker.datetime:
+            timestamp_str = ticker.datetime
+
+        # Format price with appropriate precision
+        price_str = f"{ticker.last:,.8f}".rstrip("0").rstrip(".")
+
+        # Display more informative output
+        console.print("\n[bold]Price Information[/bold]")
+        console.print(f"Exchange: [green]{exchange_name.upper()}[/green]")
+        console.print(f"Symbol: [cyan]{trading_pair}[/cyan]")
+        console.print(f"Last Price: [yellow]{price_str} {quote.upper()}[/yellow]")
+
+        # Show additional ticker information if available
+        if ticker.bid and ticker.ask:
+            bid_str = f"{ticker.bid:,.8f}".rstrip("0").rstrip(".")
+            ask_str = f"{ticker.ask:,.8f}".rstrip("0").rstrip(".")
+            spread = ticker.ask - ticker.bid
+            spread_pct = (spread / ticker.ask * 100) if ticker.ask > 0 else 0
+            console.print(
+                f"Bid: [blue]{bid_str}[/blue] | Ask: [blue]{ask_str}[/blue] | "
+                f"Spread: {spread_pct:.2f}%"
+            )
+
+        if ticker.change and ticker.percentage:
+            change_color = "green" if ticker.change >= 0 else "red"
+            change_symbol = "+" if ticker.change >= 0 else ""
+            console.print(
+                f"24h Change: [{change_color}]{change_symbol}{ticker.change:,.8f} "
+                f"({ticker.percentage:+.2f}%)[/{change_color}]"
+            )
+
+        if ticker.high and ticker.low:
+            high_str = f"{ticker.high:,.8f}".rstrip("0").rstrip(".")
+            low_str = f"{ticker.low:,.8f}".rstrip("0").rstrip(".")
+            console.print(
+                f"24h High: [green]{high_str}[/green] | 24h Low: [red]{low_str}[/red]"
+            )
+
+        if ticker.baseVolume:
+            volume_str = f"{ticker.baseVolume:,.4f}".rstrip("0").rstrip(".")
+            console.print(f"24h Volume: [magenta]{volume_str} {base.upper()}[/magenta]")
+
+        console.print(f"Time: [dim]{timestamp_str}[/dim]\n")
+
+    except Exception as e:
+        console.print(f"[bold red]Error fetching price: {str(e)}[/bold red]")
+        log.error(f"Error in price command: {e}", exc_info=True)
 
 
 @app.command()
@@ -51,7 +129,7 @@ def volume(
     base_currency: str = typer.Option(
         "BTC", "--base", "-b", help="Base currency for normalization"
     ),
-    quote_currency: Optional[str] = typer.Option(
+    quote_currency: str | None = typer.Option(
         None, "--quote", "-q", help="Optional quote currency to filter by"
     ),
     limit: int = typer.Option(
@@ -95,42 +173,37 @@ def volume(
                 f"[bold]Fetching volume data from [green]{market}[/green]...[/bold]"
             )
 
-            # Initialize MarketVolume object
-            mv = MarketVolume(
-                market=market,
-                base_currency=base_currency,
-                quote_currency=quote_currency,
-                min_refresh_time=60,  # 1 minute refresh time
-            )
-
-            # Initialize MarketVolume object
-            mv = MarketVolume(
-                market=market,
-                base_currency=base_currency,
-                quote_currency=quote_currency,
+            # Initialize Exchange object for volume operations
+            exchange_obj = Exchange(
+                exchange_name=market,
                 min_refresh_time=60,  # 1 minute refresh time
             )
 
             # Refresh the data
-            mv.refresh()
+            exchange_obj.refresh_all()
 
-            # Get volumes with filtering
-            volumes = mv.get_volumes(limit=limit, min_volume=min_volume)
+            # Get volumes with filtering - use the new API
+            volumes = exchange_obj.get_market_volumes(
+                base_currency=quote_currency,  # Filter by quote currency if specified
+                min_volume=min_volume,
+                limit=limit,
+            )
 
             if not volumes:
                 console.print(
-                    f"[bold yellow]No volume data found on {market} with the specified parameters.[/bold yellow]"
+                    f"[bold yellow]No volume data found on {market} "
+                    f"with the specified parameters.[/bold yellow]"
                 )
                 continue
 
             # Store data for this exchange
             exchange_data[market] = {
                 "volumes": volumes,
-                "market_volume": mv,
-                "total_volume": mv.get_total_volume(),
-                "quote_volumes": mv.get_volume_by_quote_currency(),
-                "base_volumes": mv.get_volume_by_base_currency(),
-                "timestamp": mv.get_timestamp(),
+                "exchange_obj": exchange_obj,
+                "total_volume": exchange_obj.get_total_volume(),
+                "quote_volumes": exchange_obj.get_volume_by_quote_currency(),
+                "base_volumes": {},  # Will need to implement this if needed
+                "timestamp": None,  # Exchange class doesn't track timestamp
             }
 
             # Add exchange name to volume data for comparison
@@ -156,7 +229,7 @@ def volume(
 def display_exchange_volumes(exchange_name, data):
     """Display volume information for a single exchange."""
     volumes = data["volumes"]
-    mv = data["market_volume"]
+    # exchange_obj = data["exchange_obj"]  # Unused for now
     total_volume = data["total_volume"]
     quote_volumes = data["quote_volumes"]
     base_volumes = data["base_volumes"]
@@ -206,7 +279,8 @@ def display_exchange_volumes(exchange_name, data):
     # Show last update time
     if timestamp:
         console.print(
-            f"\nLast updated: [cyan]{timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')}[/cyan]"
+            f"\\nLast updated: [cyan]{timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')}"
+            f"[/cyan]"
         )
     console.print("\n" + "-" * 80 + "\n")
 
@@ -284,11 +358,11 @@ def display_compared_volumes(exchange_data, all_volumes, base_currency, limit):
 
 
 @app.command()
-def exchanges(
+def exchanges(  # noqa: C901
     show_features: bool = typer.Option(
         False, "--features", "-f", help="Show exchange features (e.g., has OHLC)"
     ),
-    filter_by: List[str] = typer.Option(
+    filter_by: list[str] = typer.Option(  # noqa: B008
         None, "--filter", "-F", help="Filter exchanges by feature (e.g., fetchOHLCV)"
     ),
     base_currency: str = typer.Option(
@@ -320,7 +394,7 @@ def exchanges(
     # Filter by market if base or quote currency is specified
     exchange_market_pairs = {}
     if base_currency or quote_currency:
-        console.print(f"[bold]Filtering exchanges with market pairs...[/bold]")
+        console.print("[bold]Filtering exchanges with market pairs...[/bold]")
         with console.status(
             "[bold green]Loading markets for exchanges...[/bold green]"
         ):
@@ -333,7 +407,8 @@ def exchanges(
         # Show how many pairs were found for each exchange
         for exchange_id in exchanges_list:
             log.debug(
-                f"{exchange_id}: {len(exchange_market_pairs[exchange_id])} matching pairs"
+                f"{exchange_id}: {len(exchange_market_pairs[exchange_id])} "
+                f"matching pairs"
             )
 
     # Apply limit if specified
@@ -454,7 +529,7 @@ def markets(
     List all available markets for a specific exchange.
     """
     # Use the exchange from argument or from state
-    exchange_id = exchange or state["market"]
+    exchange_id = exchange if exchange else state["market"]
 
     try:
         console.print(f"[bold]Loading markets from {exchange_id}...[/bold]")
@@ -462,7 +537,7 @@ def markets(
         try:
             # Get markets using the Exchanges class
             filtered_markets = Exchanges.get_exchange_markets(
-                exchange_id=exchange_id,
+                exchange_id=str(exchange_id),
                 base_currency=base_currency,
                 quote_currency=quote_currency,
                 active_only=active_only,
@@ -470,7 +545,7 @@ def markets(
             )
 
             # Get exchange instance for name and other properties
-            exchange_instance = Exchanges.get_exchange_instance(exchange_id)
+            exchange_instance = Exchanges.get_exchange_instance(str(exchange_id))
 
             # Apply limit if specified
             if limit > 0:

@@ -13,7 +13,7 @@ import sys
 # Add the parent directory to sys.path for imports when running as a script
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from pyccxt.market_volume import get_market_volumes_for_pair
+from pyccxt.exchange import get_market_volumes_for_pair
 
 
 def display_pair_volumes(base_currency="BTC", quote_currency="EUR", max_exchanges=15):
@@ -41,11 +41,13 @@ def display_pair_volumes(base_currency="BTC", quote_currency="EUR", max_exchange
         return
     # Display header
     print(
-        f"Volume data for {base_currency}/{quote_currency} across {len(results)} exchanges:"
+        f"Volume data for {base_currency}/{quote_currency} across "
+        f"{len(results)} exchanges:"
     )
     print("=" * 80)
     print(
-        f"{'Exchange':<15} {'Symbol':<12} {'Base Vol':<15} {'Quote Vol':<20} {'Price':<15}"
+        f"{'Exchange':<15} {'Symbol':<12} {'Base Vol':<15} "
+        f"{'Quote Vol':<20} {'Price':<15}"
     )
     print("-" * 80)
 
@@ -68,13 +70,15 @@ def display_pair_volumes(base_currency="BTC", quote_currency="EUR", max_exchange
         price = f"{last_price:,.2f}" if last_price >= 1 else f"{last_price:.8f}"
 
         print(
-            f"{result['exchange']:<15} {result['symbol']:<12} {base_vol:<15} {quote_vol:<20} {price:<15}"
+            f"{result['exchange']:<15} {result['symbol']:<12} "
+            f"{base_vol:<15} {quote_vol:<20} {price:<15}"
         )
 
     # Display totals
     print("-" * 80)
     print(
-        f"{'TOTAL':<15} {'(' + str(len(results)) + ' exchanges)':<12} {total_base_volume:,.2f} {total_quote_volume:,.2f}"
+        f"{'TOTAL':<15} {'(' + str(len(results)) + ' exchanges)':<12} "
+        f"{total_base_volume:,.2f} {total_quote_volume:,.2f}"
     )
 
     # Display market share
