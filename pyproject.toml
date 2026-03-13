@@ -19,7 +19,7 @@ dependencies = [
     "typer",
     "rich",
     "requests",
-    "cctx",
+    "ccxt",
 ]
 license = {file = "LICENSE"}
 classifiers=[
@@ -40,7 +40,7 @@ dynamic=["version"]
 write_to = "pyccxt/_version.py"
 
 [project.scripts]
-ccxt = "pyccxt.cli:app"
+pyccxt = "pyccxt.cli:app"
 
 [tool.tox]
 legacy_tox_ini = """
