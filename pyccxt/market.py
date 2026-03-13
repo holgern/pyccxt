@@ -380,7 +380,13 @@ class Market:
     def get_ticker(self) -> Optional[Ticker]:
         """Get the current ticker data."""
         if self._ticker is None:
+            exchange_ticker = self.exchange._tickers.get(self.symbol)
+            if exchange_ticker is not None:
+                self._ticker = exchange_ticker
+
+        if self._ticker is None:
             self.refresh()
+
         return self._ticker
 
     def get_price(self) -> Optional[float]:

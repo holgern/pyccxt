@@ -12,6 +12,7 @@ from .exceptions import (
     MarketLoadError,
     PyCCXTError,
     TickerFetchError,
+    VolumeNormalizationError,
 )
 from .market import Market
 from .ticker import Ticker
@@ -21,6 +22,22 @@ logger = logging.getLogger(__name__)
 
 def _import_ccxt() -> Any:
     return importlib.import_module("ccxt")
+
+
+def _volume_sort_key(row: dict[str, Any]) -> tuple[int, float]:
+    normalized = row.get("normalizedVolume")
+    if isinstance(normalized, (int, float)):
+        return (3, float(normalized))
+
+    quote_volume = row.get("quoteVolume")
+    if isinstance(quote_volume, (int, float)):
+        return (2, float(quote_volume))
+
+    base_volume = row.get("baseVolume")
+    if isinstance(base_volume, (int, float)):
+        return (1, float(base_volume))
+
+    return (0, 0.0)
 
 
 class Exchange:
@@ -276,48 +293,89 @@ class Exchange:
 
     def get_market_volumes(
         self,
-        base_currency: str | None = None,
+        filter_base: str | None = None,
+        filter_quote: str | None = None,
+        normalize_to: str | None = "USD",
         min_volume: float = 0,
         limit: int | None = None,
+        include_unconverted: bool = True,
+        base_currency: str | None = None,
     ) -> list[dict[str, Any]]:
         """
-        Get volume data for markets, optionally filtered by base currency.
+        Get volume data for markets with explicit filtering and normalization.
 
         Args:
-            base_currency: Filter by base currency (default: None = all)
-            min_volume: Minimum volume threshold
-            limit: Maximum number of results
+            filter_base: Filter markets by base currency.
+            filter_quote: Filter markets by quote currency.
+            normalize_to: Currency used for normalized volume values.
+            min_volume: Minimum native base volume threshold.
+            limit: Maximum number of results after sorting.
+            include_unconverted: Keep rows with no normalized volume when True.
+            base_currency: Deprecated alias for ``filter_base``.
 
         Returns:
-            List of market volume data sorted by volume
+            List of market volume rows sorted by normalized volume.
         """
-        if base_currency:
-            markets = self.get_markets_by_base(base_currency)
-        else:
-            markets = self.get_all_markets()
+        if filter_base is None and base_currency is not None:
+            filter_base = base_currency
+
+        normalized_target = normalize_to.upper() if normalize_to else None
+        filtered_base = filter_base.upper() if filter_base else None
+        filtered_quote = filter_quote.upper() if filter_quote else None
+
+        markets = self.get_all_markets()
+        if self._markets and not self._tickers:
+            self.fetch_all_tickers()
 
         volumes = []
         for market in markets:
+            if filtered_base and market.base_currency != filtered_base:
+                continue
+            if filtered_quote and market.quote_currency != filtered_quote:
+                continue
+
             volume_data = market.get_volume()
             if (volume_data.get("baseVolume", 0) or 0) >= min_volume:
-                # Normalize volume to base currency if needed
-                normalized_volume = self._normalize_volume(
-                    volume_data, base_currency or "USD"
+                volume_row = self._build_volume_row(
+                    volume_data=volume_data,
+                    normalize_to=normalized_target,
                 )
-                if normalized_volume is not None:
-                    volume_data["normalizedVolume"] = normalized_volume
-                    volumes.append(volume_data)
+                if include_unconverted or volume_row["normalizedVolume"] is not None:
+                    volumes.append(volume_row)
 
-        # Sort by normalized volume or base volume
-        volumes.sort(
-            key=lambda x: x.get("normalizedVolume", x.get("baseVolume", 0) or 0),
-            reverse=True,
-        )
+        volumes.sort(key=_volume_sort_key, reverse=True)
 
         if limit is not None and limit > 0:
             return volumes[:limit]
 
         return volumes
+
+    def _build_volume_row(
+        self,
+        volume_data: dict[str, Any],
+        normalize_to: str | None,
+    ) -> dict[str, Any]:
+        """Create a standardized market-volume row."""
+        normalized_volume = None
+        is_normalized = False
+
+        if normalize_to is not None:
+            normalized_volume = self._normalize_volume(volume_data, normalize_to)
+            is_normalized = normalized_volume is not None
+
+        return {
+            "symbol": volume_data.get("symbol"),
+            "base": volume_data.get("base"),
+            "quote": volume_data.get("quote"),
+            "price": volume_data.get("price"),
+            "baseVolume": volume_data.get("baseVolume"),
+            "quoteVolume": volume_data.get("quoteVolume"),
+            "normalizedVolume": normalized_volume,
+            "normalizedCurrency": normalize_to,
+            "isNormalized": is_normalized,
+            "timestamp": volume_data.get("timestamp"),
+            "datetime": volume_data.get("datetime"),
+        }
 
     def _normalize_volume(
         self, volume_data: dict[str, Any], target_currency: str
@@ -332,32 +390,34 @@ class Exchange:
         Returns:
             Normalized volume or None if conversion not possible
         """
+        if not target_currency:
+            raise VolumeNormalizationError(
+                f"Invalid normalization target for exchange '{self.name}'."
+            )
+
         base = volume_data.get("base")
         quote = volume_data.get("quote")
         base_volume = volume_data.get("baseVolume")
         quote_volume = volume_data.get("quoteVolume")
-        price = volume_data.get("price")
-
-        if not base_volume or not quote_volume or not price:
-            return None
+        target = target_currency.upper()
 
         # If base currency is already target currency
-        if base == target_currency:
+        if base == target and isinstance(base_volume, (int, float)):
             return base_volume
 
         # If quote currency is target currency
-        if quote == target_currency:
+        if quote == target and isinstance(quote_volume, (int, float)):
             return quote_volume
 
         # Try to find conversion rate to target currency
-        if base and isinstance(base, str):
-            conversion_rate = self._get_conversion_rate(base, target_currency)
-            if conversion_rate is not None:
+        if base and isinstance(base, str) and isinstance(base_volume, (int, float)):
+            conversion_rate = self._get_conversion_rate(base, target)
+            if conversion_rate is not None and conversion_rate > 0:
                 return base_volume * conversion_rate
 
-        if quote and isinstance(quote, str):
-            conversion_rate = self._get_conversion_rate(quote, target_currency)
-            if conversion_rate is not None:
+        if quote and isinstance(quote, str) and isinstance(quote_volume, (int, float)):
+            conversion_rate = self._get_conversion_rate(quote, target)
+            if conversion_rate is not None and conversion_rate > 0:
                 return quote_volume * conversion_rate
 
         return None
@@ -391,37 +451,109 @@ class Exchange:
 
         return None
 
-    def get_total_volume(self, base_currency: str | None = None) -> float:
+    def get_total_volume(
+        self,
+        filter_base: str | None = None,
+        filter_quote: str | None = None,
+        normalize_to: str | None = "USD",
+        min_volume: float = 0,
+        include_unconverted: bool = False,
+        base_currency: str | None = None,
+    ) -> float:
         """
-        Get total trading volume across markets.
+        Get total normalized trading volume across markets.
 
         Args:
-            base_currency: Filter by base currency
+            filter_base: Filter markets by base currency.
+            filter_quote: Filter markets by quote currency.
+            normalize_to: Currency used for normalized volume values.
+            min_volume: Minimum native base volume threshold.
+            include_unconverted: Include rows without normalized values.
+            base_currency: Deprecated alias for ``filter_base``.
 
         Returns:
-            Total volume in base currency
+            Total normalized volume.
         """
-        volumes = self.get_market_volumes(base_currency=base_currency)
+        volumes = self.get_market_volumes(
+            filter_base=filter_base,
+            filter_quote=filter_quote,
+            normalize_to=normalize_to,
+            min_volume=min_volume,
+            include_unconverted=include_unconverted,
+            base_currency=base_currency,
+        )
         return sum(
-            v.get("normalizedVolume", v.get("baseVolume", 0) or 0) for v in volumes
+            float(v["normalizedVolume"])
+            for v in volumes
+            if isinstance(v.get("normalizedVolume"), (int, float))
         )
 
-    def get_volume_by_quote_currency(self) -> dict[str, float]:
+    def get_volume_by_quote_currency(
+        self,
+        filter_base: str | None = None,
+        filter_quote: str | None = None,
+        min_volume: float = 0,
+        base_currency: str | None = None,
+    ) -> dict[str, float]:
         """
-        Get trading volume grouped by quote currency.
+        Get trading volume grouped by quote currency in native quote units.
+
+        Args:
+            filter_base: Filter markets by base currency.
+            filter_quote: Filter markets by quote currency.
+            min_volume: Minimum native base volume threshold.
+            base_currency: Deprecated alias for ``filter_base``.
 
         Returns:
-            Dict of volumes indexed by quote currency
+            Dict of quote-volume totals indexed by quote currency.
         """
-        volumes = self.get_market_volumes()
-        result = {}
+        if filter_base is None and base_currency is not None:
+            filter_base = base_currency
+
+        volumes = self.get_market_volumes(
+            filter_base=filter_base,
+            filter_quote=filter_quote,
+            normalize_to=None,
+            min_volume=min_volume,
+        )
+        result: dict[str, float] = {}
 
         for v in volumes:
             quote = v.get("quote")
-            if quote:
+            quote_volume = v.get("quoteVolume")
+            if quote and isinstance(quote_volume, (int, float)):
                 if quote not in result:
-                    result[quote] = 0
-                result[quote] += v.get("normalizedVolume", v.get("baseVolume", 0) or 0)
+                    result[quote] = 0.0
+                result[quote] += float(quote_volume)
+
+        return dict(sorted(result.items(), key=lambda x: x[1], reverse=True))
+
+    def get_volume_by_base_currency(
+        self,
+        filter_base: str | None = None,
+        filter_quote: str | None = None,
+        min_volume: float = 0,
+        base_currency: str | None = None,
+    ) -> dict[str, float]:
+        """Get trading volume grouped by base currency in native base units."""
+        if filter_base is None and base_currency is not None:
+            filter_base = base_currency
+
+        volumes = self.get_market_volumes(
+            filter_base=filter_base,
+            filter_quote=filter_quote,
+            normalize_to=None,
+            min_volume=min_volume,
+        )
+        result: dict[str, float] = {}
+
+        for v in volumes:
+            base = v.get("base")
+            base_volume = v.get("baseVolume")
+            if base and isinstance(base_volume, (int, float)):
+                if base not in result:
+                    result[base] = 0.0
+                result[base] += float(base_volume)
 
         return dict(sorted(result.items(), key=lambda x: x[1], reverse=True))
 
