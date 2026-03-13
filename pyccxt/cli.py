@@ -6,6 +6,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from .exceptions import PyCCXTError
 from .exchanges import Exchanges
 from .price_by_market import PriceByMarket
 
@@ -17,6 +18,12 @@ app = typer.Typer()
 console = Console()
 
 state = {"verbose": 3, "market": "kraken"}
+
+
+def _render_library_error(prefix: str, error: PyCCXTError) -> None:
+    """Render a user-friendly library error without a traceback."""
+    console.print(f"[bold red]{prefix}: {error}[/bold red]")
+    log.error("%s: %s", prefix, error)
 
 
 @app.command()
@@ -116,6 +123,8 @@ def price(
 
         console.print(f"Time: [dim]{timestamp_str}[/dim]\n")
 
+    except PyCCXTError as error:
+        _render_library_error("Error fetching price", error)
     except Exception as e:
         console.print(f"[bold red]Error fetching price: {str(e)}[/bold red]")
         log.error(f"Error in price command: {e}", exc_info=True)
@@ -145,85 +154,96 @@ def volume(
     """
     Display trading volume metrics across one or more exchanges.
     """
-    # Handle string input (comma-separated list)
-    if "," in markets:
-        market_list = [m.strip() for m in markets.split(",")]
-    else:
-        market_list = [markets]
+    try:
+        # Handle string input (comma-separated list)
+        if "," in markets:
+            market_list = [m.strip() for m in markets.split(",")]
+        else:
+            market_list = [markets]
 
-    # If no markets provided, use default
-    if not market_list:
-        market_list = [state["market"]]
-    # Check if exchanges exist
-    all_exchanges = Exchanges.get_all_exchanges()
-    for market in market_list:
-        if market not in all_exchanges:
-            console.print(f"[bold red]Error: Exchange '{market}' not found.[/bold red]")
-            console.print(f"Available exchanges: {', '.join(all_exchanges[:10])}...")
-            return
-
-    # Dictionary to store volume data for each exchange
-    exchange_data = {}
-    all_volumes = []
-
-    # Process each exchange
-    for market in market_list:
-        try:
-            console.print(
-                f"[bold]Fetching volume data from [green]{market}[/green]...[/bold]"
-            )
-
-            # Initialize Exchange object for volume operations
-            exchange_obj = Exchange(
-                exchange_name=market,
-                min_refresh_time=60,  # 1 minute refresh time
-            )
-
-            # Refresh the data
-            exchange_obj.refresh_all()
-
-            # Get volumes with filtering - use the new API
-            volumes = exchange_obj.get_market_volumes(
-                base_currency=quote_currency,  # Filter by quote currency if specified
-                min_volume=min_volume,
-                limit=limit,
-            )
-
-            if not volumes:
+        # If no markets provided, use default
+        if not market_list:
+            market_list = [state["market"]]
+        # Check if exchanges exist
+        all_exchanges = Exchanges.get_all_exchanges()
+        for market in market_list:
+            if market not in all_exchanges:
                 console.print(
-                    f"[bold yellow]No volume data found on {market} "
-                    f"with the specified parameters.[/bold yellow]"
+                    f"[bold red]Error: Exchange '{market}' not found.[/bold red]"
                 )
-                continue
+                console.print(
+                    f"Available exchanges: {', '.join(all_exchanges[:10])}..."
+                )
+                return
 
-            # Store data for this exchange
-            exchange_data[market] = {
-                "volumes": volumes,
-                "exchange_obj": exchange_obj,
-                "total_volume": exchange_obj.get_total_volume(),
-                "quote_volumes": exchange_obj.get_volume_by_quote_currency(),
-                "base_volumes": {},  # Will need to implement this if needed
-                "timestamp": None,  # Exchange class doesn't track timestamp
-            }
+        # Dictionary to store volume data for each exchange
+        exchange_data = {}
+        all_volumes = []
 
-            # Add exchange name to volume data for comparison
-            for v in volumes:
-                v["exchange"] = market
-                all_volumes.append(v)
+        # Process each exchange
+        for market in market_list:
+            try:
+                console.print(
+                    f"[bold]Fetching volume data from [green]{market}[/green]...[/bold]"
+                )
 
-            # Display individual exchange table if not comparing
-            if not compare:
-                display_exchange_volumes(market, exchange_data[market])
+                # Initialize Exchange object for volume operations
+                exchange_obj = Exchange(
+                    exchange_name=market,
+                    min_refresh_time=60,  # 1 minute refresh time
+                )
 
-        except Exception as e:
-            console.print(
-                f"[bold red]Error fetching data from {market}: {str(e)}[/bold red]"
-            )
-            log.error(f"Error fetching volume data from {market}: {e}", exc_info=True)
+                # Refresh the data
+                exchange_obj.refresh_all()
 
-    # If comparing exchanges, display combined table
-    if compare and exchange_data:
-        display_compared_volumes(exchange_data, all_volumes, base_currency, limit)
+                # Get volumes with filtering - use the new API
+                volumes = exchange_obj.get_market_volumes(
+                    base_currency=quote_currency,
+                    min_volume=min_volume,
+                    limit=limit,
+                )
+
+                if not volumes:
+                    console.print(
+                        f"[bold yellow]No volume data found on {market} "
+                        f"with the specified parameters.[/bold yellow]"
+                    )
+                    continue
+
+                # Store data for this exchange
+                exchange_data[market] = {
+                    "volumes": volumes,
+                    "exchange_obj": exchange_obj,
+                    "total_volume": exchange_obj.get_total_volume(),
+                    "quote_volumes": exchange_obj.get_volume_by_quote_currency(),
+                    "base_volumes": {},  # Will need to implement this if needed
+                    "timestamp": None,  # Exchange class doesn't track timestamp
+                }
+
+                # Add exchange name to volume data for comparison
+                for v in volumes:
+                    v["exchange"] = market
+                    all_volumes.append(v)
+
+                # Display individual exchange table if not comparing
+                if not compare:
+                    display_exchange_volumes(market, exchange_data[market])
+
+            except PyCCXTError as error:
+                _render_library_error(f"Error fetching data from {market}", error)
+            except Exception as e:
+                console.print(
+                    f"[bold red]Error fetching data from {market}: {str(e)}[/bold red]"
+                )
+                log.error(
+                    f"Error fetching volume data from {market}: {e}", exc_info=True
+                )
+
+        # If comparing exchanges, display combined table
+        if compare and exchange_data:
+            display_compared_volumes(exchange_data, all_volumes, base_currency, limit)
+    except PyCCXTError as error:
+        _render_library_error("Error fetching volume data", error)
 
 
 def display_exchange_volumes(exchange_name, data):
@@ -381,123 +401,126 @@ def exchanges(  # noqa: C901
     """
     List all available exchanges and their properties.
     """
-    # Get all available exchanges
-    all_exchanges = Exchanges.get_all_exchanges()
+    try:
+        # Get all available exchanges
+        all_exchanges = Exchanges.get_all_exchanges()
 
-    # Filter by features if specified
-    exchanges_list = all_exchanges
-    if filter_by:
-        exchanges_list = Exchanges.filter_exchanges_by_features(
-            exchanges_list, filter_by
-        )
+        # Filter by features if specified
+        exchanges_list = all_exchanges
+        if filter_by:
+            exchanges_list = Exchanges.filter_exchanges_by_features(
+                exchanges_list, filter_by
+            )
 
-    # Filter by market if base or quote currency is specified
-    exchange_market_pairs = {}
-    if base_currency or quote_currency:
-        console.print("[bold]Filtering exchanges with market pairs...[/bold]")
-        with console.status(
-            "[bold green]Loading markets for exchanges...[/bold green]"
-        ):
-            exchanges_list, exchange_market_pairs = (
-                Exchanges.filter_exchanges_by_market(
-                    exchanges_list, base_currency, quote_currency
+        # Filter by market if base or quote currency is specified
+        exchange_market_pairs = {}
+        if base_currency or quote_currency:
+            console.print("[bold]Filtering exchanges with market pairs...[/bold]")
+            with console.status(
+                "[bold green]Loading markets for exchanges...[/bold green]"
+            ):
+                exchanges_list, exchange_market_pairs = (
+                    Exchanges.filter_exchanges_by_market(
+                        exchanges_list, base_currency, quote_currency
+                    )
                 )
-            )
 
-        # Show how many pairs were found for each exchange
-        for exchange_id in exchanges_list:
-            log.debug(
-                f"{exchange_id}: {len(exchange_market_pairs[exchange_id])} "
-                f"matching pairs"
-            )
+            # Show how many pairs were found for each exchange
+            for exchange_id in exchanges_list:
+                log.debug(
+                    f"{exchange_id}: {len(exchange_market_pairs[exchange_id])} "
+                    f"matching pairs"
+                )
 
-    # Apply limit if specified
-    if limit > 0:
-        exchanges_list = exchanges_list[:limit]
+        # Apply limit if specified
+        if limit > 0:
+            exchanges_list = exchanges_list[:limit]
 
-    # Create table
-    table = Table(title="Available CCXT Exchanges")
-    table.add_column("Exchange ID", style="cyan")
-    table.add_column("Name", style="green")
-    table.add_column("Countries", style="yellow")
+        # Create table
+        table = Table(title="Available CCXT Exchanges")
+        table.add_column("Exchange ID", style="cyan")
+        table.add_column("Name", style="green")
+        table.add_column("Countries", style="yellow")
 
-    # Add a column for matching pairs count if filtering by market
-    if base_currency or quote_currency:
-        table.add_column("Matching Pairs", style="magenta", justify="right")
+        # Add a column for matching pairs count if filtering by market
+        if base_currency or quote_currency:
+            table.add_column("Matching Pairs", style="magenta", justify="right")
 
-    feature_columns = []
-    if show_features:
-        important_features = [
-            "fetchOHLCV",
-            "fetchTicker",
-            "fetchOrderBook",
-            "fetchBalance",
-            "createOrder",
-            "fetchTrades",
-        ]
-        for feature in important_features:
-            table.add_column(feature, justify="center")
-            feature_columns.append(feature)
+        feature_columns = []
+        if show_features:
+            important_features = [
+                "fetchOHLCV",
+                "fetchTicker",
+                "fetchOrderBook",
+                "fetchBalance",
+                "createOrder",
+                "fetchTrades",
+            ]
+            for feature in important_features:
+                table.add_column(feature, justify="center")
+                feature_columns.append(feature)
 
-    # Populate table
-    for exchange_id in sorted(exchanges_list):
-        try:
-            # Create an instance of the exchange
-            exchange = Exchanges.get_exchange_instance(exchange_id)
+        # Populate table
+        for exchange_id in sorted(exchanges_list):
+            try:
+                # Create an instance of the exchange
+                exchange = Exchanges.get_exchange_instance(exchange_id)
 
-            # Get exchange properties
-            name = exchange.name
-            countries = (
-                ", ".join(exchange.countries)
-                if hasattr(exchange, "countries") and exchange.countries
-                else "-"
-            )
+                # Get exchange properties
+                name = exchange.name
+                countries = (
+                    ", ".join(exchange.countries)
+                    if hasattr(exchange, "countries") and exchange.countries
+                    else "-"
+                )
 
-            # Create row with basic info
-            row = [exchange_id, name, countries]
+                # Create row with basic info
+                row = [exchange_id, name, countries]
 
-            # Add matching pairs count if filtering by market
-            if base_currency or quote_currency:
-                row.append(str(len(exchange_market_pairs[exchange_id])))
+                # Add matching pairs count if filtering by market
+                if base_currency or quote_currency:
+                    row.append(str(len(exchange_market_pairs[exchange_id])))
 
-            # Add feature columns if requested
-            if show_features:
-                for feature in feature_columns:
-                    value = exchange.has.get(feature, False)
-                    if value is True:
-                        row.append("✓")
-                    elif value == "emulated":
-                        row.append("E")
-                    else:
-                        row.append("✗")
+                # Add feature columns if requested
+                if show_features:
+                    for feature in feature_columns:
+                        value = exchange.has.get(feature, False)
+                        if value is True:
+                            row.append("✓")
+                        elif value == "emulated":
+                            row.append("E")
+                        else:
+                            row.append("✗")
 
-            table.add_row(*row)
+                table.add_row(*row)
 
-        except Exception as e:
-            log.debug(f"Error processing {exchange_id}: {e}")
-            continue
+            except Exception as e:
+                log.debug(f"Error processing {exchange_id}: {e}")
+                continue
 
-    console.print(table)
-    console.print(f"\nTotal exchanges: {len(exchanges_list)}")
+        console.print(table)
+        console.print(f"\nTotal exchanges: {len(exchanges_list)}")
 
-    # Print filter information
-    filters = []
-    if filter_by:
-        filters.append(f"Features: {', '.join(filter_by)}")
-    if base_currency:
-        filters.append(f"Base currency: {base_currency.upper()}")
-    if quote_currency:
-        filters.append(f"Quote currency: {quote_currency.upper()}")
+        # Print filter information
+        filters = []
+        if filter_by:
+            filters.append(f"Features: {', '.join(filter_by)}")
+        if base_currency:
+            filters.append(f"Base currency: {base_currency.upper()}")
+        if quote_currency:
+            filters.append(f"Quote currency: {quote_currency.upper()}")
 
-    if filters:
-        console.print(f"Filters applied: {'; '.join(filters)}")
+        if filters:
+            console.print(f"Filters applied: {'; '.join(filters)}")
 
-    # Show feature legend if features are shown
-    if show_features:
-        console.print("\n[bold]Legend:[/bold]")
-        console.print("✓ - Feature is natively supported")
-        console.print("E - Feature is emulated")
-        console.print("✗ - Feature is not supported")
+        # Show feature legend if features are shown
+        if show_features:
+            console.print("\n[bold]Legend:[/bold]")
+            console.print("✓ - Feature is natively supported")
+            console.print("E - Feature is emulated")
+            console.print("✗ - Feature is not supported")
+    except PyCCXTError as error:
+        _render_library_error("Error listing exchanges", error)
 
 
 @app.command()
@@ -606,13 +629,8 @@ def markets(
             log.error(f"Error getting markets: {str(e)}", exc_info=True)
             raise
 
-    except AttributeError:
-        console.print(
-            f"[bold red]Error: Exchange '{exchange_id}' not found.[/bold red]"
-        )
-        console.print(
-            f"Available exchanges: {', '.join(Exchanges.get_all_exchanges()[:10])}..."
-        )
+    except PyCCXTError as error:
+        _render_library_error("Error loading markets", error)
     except Exception as e:
         console.print(f"[bold red]Error loading markets: {str(e)}[/bold red]")
         log.error(f"Error in markets command: {e}", exc_info=True)

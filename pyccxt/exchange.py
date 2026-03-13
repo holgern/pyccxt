@@ -6,6 +6,13 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
+from .exceptions import (
+    ExchangeInitializationError,
+    ExchangeNotFoundError,
+    MarketLoadError,
+    PyCCXTError,
+    TickerFetchError,
+)
 from .market import Market
 from .ticker import Ticker
 
@@ -48,11 +55,25 @@ class Exchange:
         self._tickers: dict[str, Ticker] = {}
         self._currencies: dict[str, dict[str, Any]] = {}
         self._last_update: datetime | None = None
+        self.ccxt_exchange: Any = None
 
         # Initialize exchange
         try:
             ccxt = _import_ccxt()
+        except Exception as exc:
+            raise ExchangeInitializationError(
+                "Failed to import ccxt while initializing "
+                f"exchange '{self.name}': {exc}"
+            ) from exc
+
+        try:
             exchange_class = getattr(ccxt, self.name)
+        except AttributeError as exc:
+            raise ExchangeNotFoundError(
+                f"Exchange '{self.name}' is not supported by ccxt."
+            ) from exc
+
+        try:
             self.ccxt_exchange = exchange_class(
                 {
                     "timeout": self.timeout,
@@ -60,9 +81,12 @@ class Exchange:
                 }
             )
             self._load_markets()
-        except Exception as e:
-            logger.error(f"Error initializing exchange {exchange_name}: {e}")
-            self.ccxt_exchange = None
+        except PyCCXTError:
+            raise
+        except Exception as exc:
+            raise ExchangeInitializationError(
+                f"Failed to initialize exchange '{self.name}': {exc}"
+            ) from exc
 
     def __repr__(self) -> str:
         """
@@ -86,9 +110,15 @@ class Exchange:
 
         Returns:
             Dict of markets indexed by symbol
+
+        Raises:
+            MarketLoadError: If markets cannot be loaded from the exchange.
         """
         if self.ccxt_exchange is None:
-            return {}
+            raise MarketLoadError(
+                "Cannot load markets for exchange "
+                f"'{self.name}': exchange is not initialized."
+            )
 
         try:
             markets = self.ccxt_exchange.load_markets(reload=reload)
@@ -102,9 +132,10 @@ class Exchange:
                 self._market_instances.clear()
 
             return markets
-        except Exception as e:
-            logger.error(f"Error loading markets: {e}")
-            return {}
+        except Exception as exc:
+            raise MarketLoadError(
+                f"Failed to load markets for exchange '{self.name}': {exc}"
+            ) from exc
 
     def get_market(self, symbol: str) -> Market | None:
         """
@@ -202,9 +233,15 @@ class Exchange:
 
         Returns:
             Dict of Ticker objects indexed by symbol
+
+        Raises:
+            TickerFetchError: If ticker data cannot be fetched for the exchange.
         """
         if self.ccxt_exchange is None:
-            return {}
+            raise TickerFetchError(
+                "Cannot fetch tickers for exchange "
+                f"'{self.name}': exchange is not initialized."
+            )
 
         try:
             if self.ccxt_exchange.has.get("fetchTickers", False):
@@ -214,20 +251,28 @@ class Exchange:
                     tickers[symbol] = Ticker.from_ccxt(ccxt_ticker)
                 self._tickers = tickers
                 return tickers
-            else:
-                # Fallback to individual ticker fetching
-                tickers = {}
-                for symbol in self._markets:
-                    try:
-                        ccxt_ticker = self.ccxt_exchange.fetch_ticker(symbol)
-                        tickers[symbol] = Ticker.from_ccxt(ccxt_ticker)
-                    except Exception as e:
-                        logger.debug(f"Could not fetch ticker for {symbol}: {e}")
-                self._tickers = tickers
-                return tickers
-        except Exception as e:
-            logger.error(f"Error fetching tickers: {e}")
-            return {}
+        except Exception as exc:
+            raise TickerFetchError(
+                f"Failed to fetch bulk tickers for exchange '{self.name}': {exc}"
+            ) from exc
+
+        tickers = {}
+        for symbol in self._markets:
+            try:
+                ccxt_ticker = self.ccxt_exchange.fetch_ticker(symbol)
+                tickers[symbol] = Ticker.from_ccxt(ccxt_ticker)
+            except Exception as exc:
+                logger.debug(
+                    "Could not fetch ticker for %s on %s: %s", symbol, self.name, exc
+                )
+
+        if not tickers and self._markets:
+            raise TickerFetchError(
+                f"Failed to fetch tickers for all markets on exchange '{self.name}'."
+            )
+
+        self._tickers = tickers
+        return tickers
 
     def get_market_volumes(
         self,
@@ -406,6 +451,8 @@ class Exchange:
             self.fetch_all_tickers()
             self._last_update = datetime.now(timezone.utc)
             return True
+        except PyCCXTError:
+            raise
         except Exception as e:
             logger.error(f"Error refreshing exchange data: {e}")
             return False

@@ -5,6 +5,7 @@ from unittest.mock import patch
 from typer.testing import CliRunner
 
 from pyccxt.cli import app
+from pyccxt.exceptions import MarketLoadError
 
 
 class TestCli(unittest.TestCase):
@@ -43,3 +44,17 @@ class TestCli(unittest.TestCase):
             sort_by="symbol",
         )
         mock_get_exchange_instance.assert_called_once_with("kraken")
+
+    @patch("pyccxt.cli.Exchanges.get_exchange_markets")
+    def test_markets_command_handles_library_errors(self, mock_get_exchange_markets):
+        mock_get_exchange_markets.side_effect = MarketLoadError(
+            "Failed to load markets for exchange 'kraken': boom"
+        )
+
+        result = self.runner.invoke(app, ["markets", "kraken"])
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("Error loading markets", result.output)
+        self.assertIn(
+            "Failed to load markets for exchange 'kraken': boom", result.output
+        )

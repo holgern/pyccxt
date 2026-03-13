@@ -4,6 +4,12 @@ import importlib
 import logging
 from typing import Any
 
+from .exceptions import (
+    ExchangeInitializationError,
+    ExchangeNotFoundError,
+    MarketLoadError,
+)
+
 log = logging.getLogger(__name__)
 
 
@@ -51,7 +57,12 @@ class Exchanges:
         Returns:
             list[str]: List of exchange IDs
         """
-        return _import_ccxt().exchanges
+        try:
+            return _import_ccxt().exchanges
+        except Exception as exc:
+            raise ExchangeInitializationError(
+                f"Failed to import ccxt while listing exchanges: {exc}"
+            ) from exc
 
     @staticmethod
     def get_exchange_instance(exchange_id: str) -> Any:
@@ -65,13 +76,30 @@ class Exchanges:
             Exchange instance
 
         Raises:
-            AttributeError: If exchange_id is not found
+            ExchangeNotFoundError: If exchange_id is not found.
+            ExchangeInitializationError: If ccxt cannot create the exchange instance.
         """
         try:
             ccxt = _import_ccxt()
-            return getattr(ccxt, exchange_id)()
+        except Exception as exc:
+            raise ExchangeInitializationError(
+                "Failed to import ccxt while initializing "
+                f"exchange '{exchange_id}': {exc}"
+            ) from exc
+
+        try:
+            exchange_class = getattr(ccxt, exchange_id)
         except AttributeError as err:
-            raise AttributeError(f"Exchange '{exchange_id}' not found") from err
+            raise ExchangeNotFoundError(
+                f"Exchange '{exchange_id}' is not supported by ccxt."
+            ) from err
+
+        try:
+            return exchange_class()
+        except Exception as exc:
+            raise ExchangeInitializationError(
+                f"Failed to initialize exchange '{exchange_id}': {exc}"
+            ) from exc
 
     @staticmethod
     def get_exchange_features(exchange: Any) -> dict[str, Any]:
@@ -203,7 +231,12 @@ class Exchanges:
             exchange = Exchanges.get_exchange_instance(exchange_id)
 
             # Load markets
-            markets = exchange.load_markets()
+            try:
+                markets = exchange.load_markets()
+            except Exception as exc:
+                raise MarketLoadError(
+                    f"Failed to load markets for exchange '{exchange_id}': {exc}"
+                ) from exc
 
             # Filter markets
             filtered_markets = []
