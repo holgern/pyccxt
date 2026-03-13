@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import concurrent.futures
+import importlib
 import logging
 from datetime import datetime, timezone
 from typing import Any
-
-import ccxt
 
 from .market import Market
 from .ticker import Ticker
 
 logger = logging.getLogger(__name__)
+
+
+def _import_ccxt() -> Any:
+    return importlib.import_module("ccxt")
 
 
 class Exchange:
@@ -48,6 +51,7 @@ class Exchange:
 
         # Initialize exchange
         try:
+            ccxt = _import_ccxt()
             exchange_class = getattr(ccxt, self.name)
             self.ccxt_exchange = exchange_class(
                 {
@@ -450,6 +454,7 @@ def get_market_volumes_for_pair(
     symbol = f"{base}/{quote}"
 
     # Get all available exchanges
+    ccxt = _import_ccxt()
     exchanges = [ex for ex in ccxt.exchanges if not ex.startswith("_")]
 
     # Limit the number of exchanges to avoid excessive API calls

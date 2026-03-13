@@ -172,3 +172,5 @@ cython_debug/
 pyccxt/_version.py
 
 .serena/
+
+context_pyccxt.md

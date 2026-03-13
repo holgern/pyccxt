@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from pyccxt.exchange import Exchange, get_market_volumes_for_pair
@@ -7,13 +8,15 @@ from pyccxt.exchange import Exchange, get_market_volumes_for_pair
 class TestExchange(unittest.TestCase):
     """Test cases for the Exchange class."""
 
-    @patch("ccxt.binance")
-    def test_initialization(self, mock_binance):
+    @patch("pyccxt.exchange._import_ccxt")
+    def test_initialization(self, mock_import_ccxt):
         """Test the Exchange initialization."""
         # Setup mock
         mock_exchange = MagicMock()
         mock_exchange.load_markets.return_value = {"BTC/USDT": {}}
-        mock_binance.return_value = mock_exchange
+        mock_import_ccxt.return_value = SimpleNamespace(
+            binance=MagicMock(return_value=mock_exchange)
+        )
 
         # Create Exchange instance
         exchange = Exchange("binance")
@@ -23,8 +26,8 @@ class TestExchange(unittest.TestCase):
         self.assertIsNotNone(exchange.ccxt_exchange)
         mock_exchange.load_markets.assert_called_once()
 
-    @patch("ccxt.binance")
-    def test_get_market_volumes(self, mock_binance):
+    @patch("pyccxt.exchange._import_ccxt")
+    def test_get_market_volumes(self, mock_import_ccxt):
         """Test getting market volumes."""
         # Setup mock
         mock_exchange = MagicMock()
@@ -72,7 +75,9 @@ class TestExchange(unittest.TestCase):
         mock_exchange.fetch_tickers.return_value = mock_tickers
         mock_exchange.has = {"fetchTickers": True}
 
-        mock_binance.return_value = mock_exchange
+        mock_import_ccxt.return_value = SimpleNamespace(
+            binance=MagicMock(return_value=mock_exchange)
+        )
 
         # Create Exchange instance
         exchange = Exchange("binance")
@@ -98,8 +103,8 @@ class TestExchange(unittest.TestCase):
         self.assertIn("ETH/USDT", symbols)
         self.assertIn("BTC/EUR", symbols)
 
-    @patch("ccxt.binance")
-    def test_get_market(self, mock_binance):
+    @patch("pyccxt.exchange._import_ccxt")
+    def test_get_market(self, mock_import_ccxt):
         """Test getting a specific market."""
         # Setup mock
         mock_exchange = MagicMock()
@@ -107,7 +112,9 @@ class TestExchange(unittest.TestCase):
             "BTC/USDT": {"id": "BTCUSDT", "symbol": "BTC/USDT"},
         }
         mock_exchange.load_markets.return_value = mock_markets
-        mock_binance.return_value = mock_exchange
+        mock_import_ccxt.return_value = SimpleNamespace(
+            binance=MagicMock(return_value=mock_exchange)
+        )
 
         # Create Exchange instance
         exchange = Exchange("binance")

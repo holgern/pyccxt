@@ -1,8 +1,7 @@
+import importlib
 import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional
-
-import ccxt
 
 from .ohlc import OHLC
 from .ohlcv_collection import OHLCVCollection
@@ -12,6 +11,10 @@ if TYPE_CHECKING:
     from .exchange import Exchange
 
 logger = logging.getLogger(__name__)
+
+
+def _import_ccxt() -> Any:
+    return importlib.import_module("ccxt")
 
 
 class Market:
@@ -590,6 +593,7 @@ class Market:
         if precision is not None and isinstance(precision, (int, float)):
             exchange = self.exchange.ccxt_exchange
             if exchange is not None and hasattr(exchange, "precisionMode"):
+                ccxt = _import_ccxt()
                 if exchange.precisionMode == ccxt.TICK_SIZE:
                     return round(price / precision) * precision
                 elif exchange.precisionMode == ccxt.SIGNIFICANT_DIGITS:
@@ -617,6 +621,7 @@ class Market:
         if precision is not None and isinstance(precision, (int, float)):
             exchange = self.exchange.ccxt_exchange
             if exchange is not None and hasattr(exchange, "precisionMode"):
+                ccxt = _import_ccxt()
                 if exchange.precisionMode == ccxt.TICK_SIZE:
                     return round(amount / precision) * precision
                 elif exchange.precisionMode == ccxt.SIGNIFICANT_DIGITS:

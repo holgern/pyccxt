@@ -109,42 +109,42 @@ high_volume = exchange.get_market_volumes(min_volume=1000000)
 
 ```bash
 # Basic price lookup
-ccxt price BTC USD
+pyccxt price BTC USD
 
 # Specify exchange
-ccxt price ETH EUR --market kraken
+pyccxt price ETH EUR --market kraken
 
 # Get detailed price info with spread and 24h change
-ccxt price BTC USDT --market binance
+pyccxt price BTC USDT --market binance
 ```
 
 ### Volume Commands
 
 ```bash
 # Show top volumes for an exchange
-ccxt volume --market binance --limit 20
+pyccxt volume --market binance --limit 20
 
 # Filter by quote currency
-ccxt volume --market coinbase --quote USD --limit 15
+pyccxt volume --market coinbase --quote USD --limit 15
 
 # Compare volumes across exchanges
-ccxt volume --base BTC --exchanges binance,kraken,coinbase
+pyccxt volume --base BTC --exchanges binance,kraken,coinbase
 ```
 
 ### Exchange Commands
 
 ```bash
 # List all exchanges
-ccxt exchanges
+pyccxt exchanges
 
 # Show exchange features
-ccxt exchanges --features
+pyccxt exchanges --features
 
 # Filter by supported features
-ccxt exchanges --filter fetchOHLCV,fetchTicker
+pyccxt exchanges --filter fetchOHLCV,fetchTicker
 
 # Filter by supported trading pairs
-ccxt exchanges --base BTC --quote USD
+pyccxt exchanges --base BTC --quote USD
 ```
 
 ## API Reference
