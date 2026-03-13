@@ -26,6 +26,30 @@ def _render_library_error(prefix: str, error: PyCCXTError) -> None:
     log.error("%s: %s", prefix, error)
 
 
+def _format_optional_number(value: float | None, precision: int = 4) -> str:
+    """Format optional numeric values for terminal output."""
+    if value is None:
+        return "N/A"
+    return f"{value:.{precision}f}"
+
+
+def _cli_volume_sort_key(row: dict[str, object]) -> tuple[int, float]:
+    """Sort normalized rows first, unnormalized rows last."""
+    normalized = row.get("normalizedVolume")
+    if isinstance(normalized, (int, float)):
+        return (3, float(normalized))
+
+    quote_volume = row.get("quoteVolume")
+    if isinstance(quote_volume, (int, float)):
+        return (2, float(quote_volume))
+
+    base_volume = row.get("baseVolume")
+    if isinstance(base_volume, (int, float)):
+        return (1, float(base_volume))
+
+    return (0, 0.0)
+
+
 @app.command()
 def price(
     base: str = typer.Argument(..., help="Base Currency symbol (e.g., BTC)"),
@@ -135,17 +159,23 @@ def volume(
     markets: str = typer.Option(
         "kraken", "--market", "-m", help="Exchange(s) to use (comma-separated list)"
     ),
-    base_currency: str = typer.Option(
-        "BTC", "--base", "-b", help="Base currency for normalization"
+    base_currency: str | None = typer.Option(
+        None, "--base", "-b", help="Filter by market base currency"
     ),
     quote_currency: str | None = typer.Option(
-        None, "--quote", "-q", help="Optional quote currency to filter by"
+        None, "--quote", "-q", help="Filter by market quote currency"
+    ),
+    normalize_to: str = typer.Option(
+        "USD",
+        "--normalize-to",
+        "-n",
+        help="Target currency for normalized volume display",
     ),
     limit: int = typer.Option(
         10, "--limit", "-l", help="Maximum number of markets to display per exchange"
     ),
     min_volume: float = typer.Option(
-        0.0, "--min-volume", "-v", help="Minimum volume threshold in BTC"
+        0.0, "--min-volume", help="Minimum base-volume threshold"
     ),
     compare: bool = typer.Option(
         False, "--compare", "-c", help="Compare volumes across exchanges"
@@ -198,9 +228,12 @@ def volume(
 
                 # Get volumes with filtering - use the new API
                 volumes = exchange_obj.get_market_volumes(
-                    base_currency=quote_currency,
+                    filter_base=base_currency,
+                    filter_quote=quote_currency,
+                    normalize_to=normalize_to,
                     min_volume=min_volume,
                     limit=limit,
+                    include_unconverted=True,
                 )
 
                 if not volumes:
@@ -214,16 +247,30 @@ def volume(
                 exchange_data[market] = {
                     "volumes": volumes,
                     "exchange_obj": exchange_obj,
-                    "total_volume": exchange_obj.get_total_volume(),
-                    "quote_volumes": exchange_obj.get_volume_by_quote_currency(),
-                    "base_volumes": {},  # Will need to implement this if needed
+                    "total_volume": exchange_obj.get_total_volume(
+                        filter_base=base_currency,
+                        filter_quote=quote_currency,
+                        normalize_to=normalize_to,
+                        min_volume=min_volume,
+                        include_unconverted=False,
+                    ),
+                    "quote_volumes": exchange_obj.get_volume_by_quote_currency(
+                        filter_base=base_currency,
+                        filter_quote=quote_currency,
+                        min_volume=min_volume,
+                    ),
+                    "base_volumes": exchange_obj.get_volume_by_base_currency(
+                        filter_base=base_currency,
+                        filter_quote=quote_currency,
+                        min_volume=min_volume,
+                    ),
+                    "normalize_to": normalize_to.upper(),
                     "timestamp": None,  # Exchange class doesn't track timestamp
                 }
 
                 # Add exchange name to volume data for comparison
                 for v in volumes:
-                    v["exchange"] = market
-                    all_volumes.append(v)
+                    all_volumes.append({**v, "exchange": market})
 
                 # Display individual exchange table if not comparing
                 if not compare:
@@ -241,7 +288,7 @@ def volume(
 
         # If comparing exchanges, display combined table
         if compare and exchange_data:
-            display_compared_volumes(exchange_data, all_volumes, base_currency, limit)
+            display_compared_volumes(exchange_data, all_volumes, normalize_to, limit)
     except PyCCXTError as error:
         _render_library_error("Error fetching volume data", error)
 
@@ -249,10 +296,10 @@ def volume(
 def display_exchange_volumes(exchange_name, data):
     """Display volume information for a single exchange."""
     volumes = data["volumes"]
-    # exchange_obj = data["exchange_obj"]  # Unused for now
     total_volume = data["total_volume"]
     quote_volumes = data["quote_volumes"]
     base_volumes = data["base_volumes"]
+    normalize_to = data["normalize_to"]
     timestamp = data["timestamp"]
 
     # Create a table for top markets by volume
@@ -261,7 +308,9 @@ def display_exchange_volumes(exchange_name, data):
     # Add columns
     table.add_column("Rank", style="cyan", justify="right")
     table.add_column("Symbol", style="green")
-    table.add_column("BTC Volume", style="yellow", justify="right")
+    table.add_column(
+        f"Normalized Volume ({normalize_to})", style="yellow", justify="right"
+    )
     table.add_column("Base Volume", justify="right")
     table.add_column("Quote Volume", justify="right")
     table.add_column("Price", justify="right")
@@ -271,10 +320,10 @@ def display_exchange_volumes(exchange_name, data):
         table.add_row(
             str(i),
             v["symbol"],
-            f"{v['volume']:.4f}",
-            f"{v['baseVolume']:.4f}",
-            f"{v['quoteVolume']:.4f}",
-            f"{v['price']:.6f}",
+            _format_optional_number(v.get("normalizedVolume")),
+            _format_optional_number(v.get("baseVolume")),
+            _format_optional_number(v.get("quoteVolume")),
+            _format_optional_number(v.get("price"), precision=6),
         )
 
     # Display the table
@@ -282,19 +331,17 @@ def display_exchange_volumes(exchange_name, data):
 
     # Display summary information
     console.print("\n[bold]Volume Summary[/bold]")
-    console.print(f"Total Volume: [yellow]{total_volume:.2f} BTC[/yellow]")
+    console.print(f"Total Volume: [yellow]{total_volume:.2f} {normalize_to}[/yellow]")
 
     # Get top quote currencies by volume
     console.print("\n[bold]Top Quote Currencies by Volume[/bold]")
     for i, (quote, volume) in enumerate(list(quote_volumes.items())[:5], 1):
-        pct = (volume / total_volume) * 100 if total_volume > 0 else 0
-        console.print(f"{i}. {quote}: [yellow]{volume:.2f} BTC[/yellow] ({pct:.1f}%)")
+        console.print(f"{i}. {quote}: [yellow]{volume:.2f} {quote}[/yellow]")
 
     # Get top base currencies by volume
     console.print("\n[bold]Top Base Currencies by Volume[/bold]")
     for i, (base, volume) in enumerate(list(base_volumes.items())[:5], 1):
-        pct = (volume / total_volume) * 100 if total_volume > 0 else 0
-        console.print(f"{i}. {base}: [yellow]{volume:.2f} BTC[/yellow] ({pct:.1f}%)")
+        console.print(f"{i}. {base}: [yellow]{volume:.2f} {base}[/yellow]")
 
     # Show last update time
     if timestamp:
@@ -305,23 +352,31 @@ def display_exchange_volumes(exchange_name, data):
     console.print("\n" + "-" * 80 + "\n")
 
 
-def display_compared_volumes(exchange_data, all_volumes, base_currency, limit):
+def display_compared_volumes(exchange_data, all_volumes, normalize_to, limit):
     """Display comparison of volumes across exchanges."""
-    # Sort all volumes by BTC volume
-    sorted_volumes = sorted(all_volumes, key=lambda x: x["volume"], reverse=True)
+    normalized_currency = normalize_to.upper()
+    sorted_volumes = sorted(all_volumes, key=_cli_volume_sort_key, reverse=True)
 
     # Limit the total number of entries if needed
     if limit > 0:
         sorted_volumes = sorted_volumes[:limit]
 
     # Create comparison table
-    table = Table(title=f"Top Markets by {base_currency} Volume Across Exchanges")
+    table = Table(
+        title=(
+            f"Top Markets by Normalized Volume ({normalized_currency}) Across Exchanges"
+        )
+    )
 
     # Add columns
     table.add_column("Rank", style="cyan", justify="right")
     table.add_column("Exchange", style="blue")
     table.add_column("Symbol", style="green")
-    table.add_column(f"{base_currency} Volume", style="yellow", justify="right")
+    table.add_column(
+        f"Normalized Volume ({normalized_currency})",
+        style="yellow",
+        justify="right",
+    )
     table.add_column("Base Volume", justify="right")
     table.add_column("Quote Volume", justify="right")
     table.add_column("Price", justify="right")
@@ -332,10 +387,10 @@ def display_compared_volumes(exchange_data, all_volumes, base_currency, limit):
             str(i),
             v["exchange"],
             v["symbol"],
-            f"{v['volume']:.4f}",
-            f"{v['baseVolume']:.4f}",
-            f"{v['quoteVolume']:.4f}",
-            f"{v['price']:.6f}",
+            _format_optional_number(v.get("normalizedVolume")),
+            _format_optional_number(v.get("baseVolume")),
+            _format_optional_number(v.get("quoteVolume")),
+            _format_optional_number(v.get("price"), precision=6),
         )
 
     # Display the table
@@ -346,11 +401,13 @@ def display_compared_volumes(exchange_data, all_volumes, base_currency, limit):
     total_all_exchanges = sum(data["total_volume"] for data in exchange_data.values())
 
     # Create exchange comparison table
-    summary_table = Table(title=f"Volume by Exchange in {base_currency}")
+    summary_table = Table(
+        title=f"Normalized Volume by Exchange in {normalized_currency}"
+    )
     summary_table.add_column("Rank", style="cyan", justify="right")
     summary_table.add_column("Exchange", style="blue")
     summary_table.add_column(
-        f"Total {base_currency} Volume", style="yellow", justify="right"
+        f"Total {normalized_currency} Volume", style="yellow", justify="right"
     )
     summary_table.add_column("% of All Exchanges", style="magenta", justify="right")
 
