@@ -1,6 +1,7 @@
 # pyccxt
 
-A Python library for accessing cryptocurrency exchange data via CCXT. Get ticker prices and market volumes across different exchanges with aggregated analysis capabilities.
+A Python library for accessing cryptocurrency exchange data via CCXT. Get ticker prices
+and market volumes across different exchanges with aggregated analysis capabilities.
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -8,7 +9,9 @@ A Python library for accessing cryptocurrency exchange data via CCXT. Get ticker
 
 ## Overview
 
-pyccxt provides a unified interface to access cryptocurrency market data from multiple exchanges. Built on top of the popular [CCXT](https://github.com/ccxt/ccxt) library, it offers:
+pyccxt provides a unified interface to access cryptocurrency market data from multiple
+exchanges. Built on top of the popular [CCXT](https://github.com/ccxt/ccxt) library, it
+offers:
 
 - **Price aggregation** across multiple exchanges
 - **Volume analysis** by market and currency
@@ -41,9 +44,17 @@ from pyccxt import Exchange
 exchange = Exchange("binance")
 
 # Get market volumes
-volumes = exchange.get_market_volumes(base_currency="BTC", limit=10)
+volumes = exchange.get_market_volumes(
+    filter_base="BTC",
+    normalize_to="USD",
+    limit=10,
+)
 for volume_data in volumes:
-    print(f"{volume_data['symbol']}: {volume_data['volume']:.2f}")
+    print(
+        f"{volume_data['symbol']}: "
+        f"{volume_data['normalizedVolume']:.2f} "
+        f"{volume_data['normalizedCurrency']}"
+    )
 
 # Get price for specific pair
 market = exchange.get_market("BTC/USDT")
@@ -80,14 +91,14 @@ pyccxt exchanges --features --filter fetchOHLCV
 ### Volume Analysis
 
 ```python
-from pyccxt import Exchange
-
-# Compare volumes across exchanges
-from pyccxt.exchange import get_market_volumes_for_pair
+from pyccxt import Exchange, get_market_volumes_for_pair
 
 volumes = get_market_volumes_for_pair("BTC", "USDT", max_exchanges=5)
 for vol in volumes:
-    print(f"{vol['exchange']}: {vol['volume']:.2f} USDT")
+    print(
+        f"{vol['exchange']}: {vol['normalizedVolume']:.2f} "
+        f"{vol['normalizedCurrency']}"
+    )
 ```
 
 ### Market Filtering
@@ -96,11 +107,11 @@ for vol in volumes:
 # Get markets by base currency
 btc_markets = exchange.get_markets_by_base("BTC")
 
-# Get markets by quote currency  
+# Get markets by quote currency
 usd_markets = exchange.get_markets_by_quote("USD")
 
 # Filter by minimum volume
-high_volume = exchange.get_market_volumes(min_volume=1000000)
+high_volume = exchange.get_market_volumes(normalize_to="USD", min_volume=1000000)
 ```
 
 ## CLI Usage
@@ -122,13 +133,13 @@ pyccxt price BTC USDT --market binance
 
 ```bash
 # Show top volumes for an exchange
-pyccxt volume --market binance --limit 20
+pyccxt volume --market binance --normalize-to USD --limit 20
 
 # Filter by quote currency
-pyccxt volume --market coinbase --quote USD --limit 15
+pyccxt volume --market coinbase --quote USD --normalize-to USD --limit 15
 
 # Compare volumes across exchanges
-pyccxt volume --base BTC --exchanges binance,kraken,coinbase
+pyccxt volume --market binance,kraken,coinbase --base BTC --compare --normalize-to USD
 ```
 
 ### Exchange Commands
@@ -162,9 +173,13 @@ exchange = Exchange("binance")
 - `get_market(symbol)` - Get Market instance for symbol
 - `get_markets_by_base(currency)` - Filter by base currency
 - `get_markets_by_quote(currency)` - Filter by quote currency
-- `get_market_volumes(base_currency, min_volume, limit)` - Get volume data
+- `get_market_volumes(filter_base=None, filter_quote=None, normalize_to="USD", min_volume=0, limit=None, include_unconverted=True)` -
+  Get volume rows with explicit filters and normalization
 - `fetch_all_tickers()` - Get all ticker data
-- `get_total_volume(base_currency)` - Get total exchange volume
+- `get_total_volume(filter_base=None, filter_quote=None, normalize_to="USD", min_volume=0, include_unconverted=False)` -
+  Get total normalized exchange volume
+- `get_volume_by_quote_currency()` - Get quote-native totals grouped by quote currency
+- `get_volume_by_base_currency()` - Get base-native totals grouped by base currency
 
 ### Market Class
 
@@ -197,38 +212,39 @@ from pyccxt import Exchange
 
 def analyze_btc_markets():
     """Analyze BTC trading volumes across top exchanges."""
-    
+
     # Top exchanges by volume
     exchanges = ["binance", "coinbase", "kraken", "huobi", "okx"]
-    
+
     total_volumes = {}
-    
+
     for exchange_name in exchanges:
         try:
             exchange = Exchange(exchange_name)
             btc_volumes = exchange.get_market_volumes(
-                base_currency="BTC", 
-                limit=10
+                filter_base="BTC",
+                normalize_to="USD",
+                limit=10,
             )
-            
-            total_vol = sum(vol['volume'] for vol in btc_volumes)
+
+            total_vol = sum(vol["normalizedVolume"] or 0 for vol in btc_volumes)
             total_volumes[exchange_name] = total_vol
-            
-            print(f"{exchange_name}: {total_vol:.2f} BTC volume")
-            
+
+            print(f"{exchange_name}: {total_vol:.2f} USD normalized volume")
+
         except Exception as e:
             print(f"Error with {exchange_name}: {e}")
-    
+
     # Sort by volume
     sorted_exchanges = sorted(
-        total_volumes.items(), 
-        key=lambda x: x[1], 
+        total_volumes.items(),
+        key=lambda x: x[1],
         reverse=True
     )
-    
-    print("\\nTop exchanges by BTC volume:")
+
+    print("\\nTop exchanges by normalized BTC market volume:")
     for exchange, volume in sorted_exchanges:
-        print(f"{exchange}: {volume:.2f} BTC")
+        print(f"{exchange}: {volume:.2f} USD")
 
 if __name__ == "__main__":
     analyze_btc_markets()
@@ -237,37 +253,43 @@ if __name__ == "__main__":
 ### Price Comparison
 
 ```python
-from pyccxt.exchange import get_market_volumes_for_pair
+from pyccxt import Exchange, get_market_volumes_for_pair
 
 def compare_prices(base="BTC", quote="USDT"):
     """Compare prices across multiple exchanges."""
-    
+
     volumes = get_market_volumes_for_pair(base, quote, max_exchanges=10)
-    
+
     prices = []
     for vol_data in volumes:
-        exchange_name = vol_data['exchange']
+        exchange_name = vol_data["exchange"]
         try:
             exchange = Exchange(exchange_name)
             market = exchange.get_market(f"{base}/{quote}")
             if market:
                 ticker = market.get_ticker()
                 if ticker and ticker.last:
-                    prices.append({
-                        'exchange': exchange_name,
-                        'price': ticker.last,
-                        'volume': vol_data['volume']
-                    })
+                    prices.append(
+                        {
+                            "exchange": exchange_name,
+                            "price": ticker.last,
+                            "normalizedVolume": vol_data["normalizedVolume"],
+                            "normalizedCurrency": vol_data["normalizedCurrency"],
+                        }
+                    )
         except Exception as e:
             print(f"Error getting price from {exchange_name}: {e}")
-    
+
     # Sort by price
-    prices.sort(key=lambda x: x['price'])
-    
+    prices.sort(key=lambda x: x["price"])
+
     print(f"\\n{base}/{quote} Price Comparison:")
     for price_data in prices:
-        print(f"{price_data['exchange']}: ${price_data['price']:.2f} "
-              f"(Vol: {price_data['volume']:.2f})")
+        print(
+            f"{price_data['exchange']}: ${price_data['price']:.2f} "
+            f"(Vol: {price_data['normalizedVolume']:.2f} "
+            f"{price_data['normalizedCurrency']})"
+        )
 
 if __name__ == "__main__":
     compare_prices("BTC", "USDT")
@@ -276,25 +298,11 @@ if __name__ == "__main__":
 
 ## Configuration
 
-### Environment Variables
-
-```bash
-# Optional: Set default exchange
-export PYCCXT_DEFAULT_EXCHANGE=binance
-
-# Optional: Set API timeout
-export PYCCXT_TIMEOUT=30
-```
-
-### Exchange-Specific Settings
+### Exchange Construction
 
 ```python
-# Custom exchange configuration
-exchange = Exchange("binance", {
-    'timeout': 30000,
-    'enableRateLimit': True,
-    'sandbox': False  # Use sandbox/testnet if available
-})
+# Supported constructor options
+exchange = Exchange("binance", min_refresh_time=60, timeout=30000)
 ```
 
 ## Development
@@ -345,12 +353,14 @@ pre-commit run --all-files
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for
+details.
 
 ## Acknowledgments
 
 - Built on top of [CCXT](https://github.com/ccxt/ccxt) - Cryptocurrency trading library
-- CLI powered by [Typer](https://typer.tiangolo.com/) and [Rich](https://rich.readthedocs.io/)
+- CLI powered by [Typer](https://typer.tiangolo.com/) and
+  [Rich](https://rich.readthedocs.io/)
 - Inspired by the need for unified cryptocurrency market analysis
 
 ## Changelog
@@ -371,4 +381,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-**Note**: This library is for informational purposes only. Always verify data from multiple sources before making trading decisions.
+**Note**: This library is for informational purposes only. Always verify data from
+multiple sources before making trading decisions.

@@ -5,18 +5,19 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .exchange import Exchange
+    from .exchange import get_market_volumes_for_pair
     from .market import Market
     from .ohlc import OHLC
     from .ohlcv_collection import OHLCVCollection
-    from .price_by_market import MarketVolume, PriceByMarket
+    from .price_by_market import PriceByMarket
     from .ticker import Ticker
 
 
 _EXPORTS = {
     "PriceByMarket": (".price_by_market", "PriceByMarket"),
     "Ticker": (".ticker", "Ticker"),
-    "MarketVolume": (".price_by_market", "MarketVolume"),
     "Exchange": (".exchange", "Exchange"),
+    "get_market_volumes_for_pair": (".exchange", "get_market_volumes_for_pair"),
     "Market": (".market", "Market"),
     "OHLC": (".ohlc", "OHLC"),
     "OHLCVCollection": (".ohlcv_collection", "OHLCVCollection"),
@@ -25,8 +26,8 @@ _EXPORTS = {
 __all__ = [
     "PriceByMarket",
     "Ticker",
-    "MarketVolume",
     "Exchange",
+    "get_market_volumes_for_pair",
     "Market",
     "OHLC",
     "OHLCVCollection",

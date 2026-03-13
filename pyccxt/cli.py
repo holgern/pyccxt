@@ -7,11 +7,8 @@ from rich.console import Console
 from rich.table import Table
 
 from .exceptions import PyCCXTError
+from .exchange import Exchange
 from .exchanges import Exchanges
-from .price_by_market import PriceByMarket
-
-# Exchange is now an alias for PriceByMarket with enhanced functionality
-Exchange = PriceByMarket
 
 log = logging.getLogger(__name__)
 app = typer.Typer()
