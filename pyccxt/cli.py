@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
+from typing import Any, TypedDict
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
+from .asciichart import AsciiChart
 from .exceptions import PyCCXTError
 from .exchange import Exchange
 from .exchanges import Exchanges
@@ -14,7 +17,13 @@ log = logging.getLogger(__name__)
 app = typer.Typer()
 console = Console()
 
-state = {"verbose": 3, "market": "kraken"}
+
+class CLIState(TypedDict):
+    verbose: int
+    market: str
+
+
+state: CLIState = {"verbose": 3, "market": "kraken"}
 
 
 def _render_library_error(prefix: str, error: PyCCXTError) -> None:
@@ -47,6 +56,228 @@ def _cli_volume_sort_key(row: dict[str, object]) -> tuple[int, float]:
     return (0, 0.0)
 
 
+def _format_timestamp(value: object) -> str:
+    """Format timestamps for terminal output."""
+    if value is None:
+        return "N/A"
+
+    if isinstance(value, datetime):
+        timestamp = value
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        return timestamp.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+    if isinstance(value, (int, float)):
+        try:
+            timestamp = datetime.fromtimestamp(float(value) / 1000, tz=timezone.utc)
+        except (OSError, OverflowError, ValueError):
+            return str(value)
+        return timestamp.strftime("%Y-%m-%d %H:%M:%S UTC")
+
+    return str(value)
+
+
+def _format_numeric_value(value: object, precision: int = 4) -> str:
+    """Format numeric values consistently for CLI tables."""
+    if value is None:
+        return "N/A"
+    if isinstance(value, (int, float)):
+        return f"{float(value):,.{precision}f}".rstrip("0").rstrip(".")
+    return str(value)
+
+
+def _resolve_exchange_name(market: str | None) -> str:
+    """Resolve the exchange name from explicit option or CLI state."""
+    return market if market else state["market"]
+
+
+def _render_missing_pair(exchange_name: str, symbol: str) -> None:
+    """Render a helpful missing-market message."""
+    base, quote = symbol.split("/", maxsplit=1)
+    console.print(
+        f"[bold red]Error: Trading pair {symbol} not found on "
+        f"{exchange_name}[/bold red]"
+    )
+    console.print("Try using the 'markets' command to see available pairs:")
+    console.print(
+        "  pyccxt markets "
+        f"{exchange_name} --base {base.upper()} --quote {quote.upper()}"
+    )
+
+
+def _get_market_or_render_error(exchange_obj: Exchange, symbol: str):
+    """Get a market or render a user-facing error."""
+    market_obj = exchange_obj.get_market(symbol)
+    if market_obj is None:
+        _render_missing_pair(exchange_obj.name, symbol)
+    return market_obj
+
+
+def _exchange_supports_ohlcv(exchange_obj: Exchange) -> bool | None:
+    """Return OHLCV support if the exchange exposes capability metadata."""
+    ccxt_exchange = getattr(exchange_obj, "ccxt_exchange", None)
+    has = getattr(ccxt_exchange, "has", None)
+    if isinstance(has, dict):
+        fetch_ohlcv = has.get("fetchOHLCV")
+        if isinstance(fetch_ohlcv, bool):
+            return fetch_ohlcv
+    return None
+
+
+def _render_ohlcv_fetch_error(exchange_name: str, symbol: str, timeframe: str) -> None:
+    """Render a user-facing OHLCV fetch error."""
+    console.print(
+        f"[bold red]Error: Could not fetch OHLCV data for {symbol} on "
+        f"{exchange_name} ({timeframe})[/bold red]"
+    )
+    console.print(
+        f"Requested exchange: [cyan]{exchange_name}[/cyan] | "
+        f"Symbol: [cyan]{symbol}[/cyan] | Timeframe: [cyan]{timeframe}[/cyan]"
+    )
+
+
+def _build_price_rows_table(
+    exchange_name: str,
+    symbol: str,
+    timeframe: str,
+    price_type: str,
+    rows: list[dict[str, Any]],
+) -> Table:
+    """Build the price-series table used by the chart command."""
+    table = Table(title=f"Price Data for {symbol} on {exchange_name} ({timeframe})")
+    table.add_column("#", justify="right")
+    table.add_column("Timestamp")
+    table.add_column("Price Type")
+    table.add_column("Price", justify="right")
+    table.add_column("Volume", justify="right")
+
+    for index, row in enumerate(rows, start=1):
+        table.add_row(
+            str(index),
+            _format_timestamp(row.get("timestamp")),
+            str(row.get("price_type") or price_type),
+            _format_numeric_value(row.get("price"), precision=6),
+            _format_numeric_value(row.get("volume"), precision=4),
+        )
+
+    return table
+
+
+def _build_ohlcv_table(
+    exchange_name: str,
+    symbol: str,
+    timeframe: str,
+    rows: list[dict[str, Any]],
+) -> Table:
+    """Build the OHLCV table used by the ohlcv command."""
+    table = Table(title=f"OHLCV Data for {symbol} on {exchange_name} ({timeframe})")
+    table.add_column("#", justify="right")
+    table.add_column("Timestamp")
+    table.add_column("Open", justify="right")
+    table.add_column("High", justify="right")
+    table.add_column("Low", justify="right")
+    table.add_column("Close", justify="right")
+    table.add_column("Volume", justify="right")
+
+    for index, row in enumerate(rows, start=1):
+        timestamp = row.get("datetime") or row.get("timestamp")
+        table.add_row(
+            str(index),
+            _format_timestamp(timestamp),
+            _format_numeric_value(row.get("open"), precision=6),
+            _format_numeric_value(row.get("high"), precision=6),
+            _format_numeric_value(row.get("low"), precision=6),
+            _format_numeric_value(row.get("close"), precision=6),
+            _format_numeric_value(row.get("volume"), precision=4),
+        )
+
+    return table
+
+
+def _extract_prices(rows: list[dict[str, Any]]) -> list[float]:
+    """Extract numeric price values from normalized rows."""
+    prices: list[float] = []
+    for row in rows:
+        price = row.get("price")
+        if not isinstance(price, (int, float)):
+            raise ValueError("Price rows must contain numeric 'price' values.")
+        prices.append(float(price))
+    return prices
+
+
+def display_price_chart(
+    exchange_name: str,
+    symbol: str,
+    timeframe: str,
+    price_type: str,
+    rows: list[dict[str, Any]],
+    height: int,
+    inter_points_margin: int,
+    show_table: bool,
+) -> None:
+    """Render a single-series ASCII price chart and optional data table."""
+    if not rows:
+        console.print(
+            f"[bold yellow]No OHLCV price data available for {symbol} on "
+            f"{exchange_name} ({timeframe}).[/bold yellow]"
+        )
+        return
+
+    chart_title = f"{exchange_name.upper()} {symbol} {timeframe} {price_type}"
+    chart_text = AsciiChart(
+        _extract_prices(rows),
+        title=chart_title,
+        x_axis_description="Candles",
+        y_axis_description=price_type.capitalize(),
+    ).render(height=height, inter_points_margin=inter_points_margin)
+
+    console.print(f"[bold]{chart_title}[/bold]")
+    console.print(chart_text)
+
+    if show_table:
+        console.print(
+            _build_price_rows_table(exchange_name, symbol, timeframe, price_type, rows)
+        )
+
+
+def display_ohlcv_chart(
+    exchange_name: str,
+    symbol: str,
+    timeframe: str,
+    plot_price: str,
+    ohlc_rows: list[dict[str, Any]],
+    price_rows: list[dict[str, Any]],
+    height: int,
+    inter_points_margin: int,
+    show_table: bool,
+) -> None:
+    """Render an ASCII OHLCV-derived chart and optional candle table."""
+    if not price_rows:
+        console.print(
+            f"[bold yellow]No OHLCV data available for {symbol} on "
+            f"{exchange_name} ({timeframe}).[/bold yellow]"
+        )
+        if show_table and ohlc_rows:
+            console.print(
+                _build_ohlcv_table(exchange_name, symbol, timeframe, ohlc_rows)
+            )
+        return
+
+    chart_title = f"{exchange_name.upper()} {symbol} {timeframe} {plot_price}"
+    chart_text = AsciiChart(
+        _extract_prices(price_rows),
+        title=chart_title,
+        x_axis_description="Candles",
+        y_axis_description=plot_price.capitalize(),
+    ).render(height=height, inter_points_margin=inter_points_margin)
+
+    console.print(f"[bold]{chart_title}[/bold]")
+    console.print(chart_text)
+
+    if show_table:
+        console.print(_build_ohlcv_table(exchange_name, symbol, timeframe, ohlc_rows))
+
+
 @app.command()
 def price(
     base: str = typer.Argument(..., help="Base Currency symbol (e.g., BTC)"),
@@ -56,23 +287,14 @@ def price(
     """Get the current price for a trading pair on an exchange."""
     try:
         # Use the Exchange class to get market data
-        exchange_name = market if market else state["market"]
+        exchange_name = _resolve_exchange_name(market)
         exchange_obj = Exchange(exchange_name=exchange_name)
 
         # Get the market for the specific trading pair
         trading_pair = f"{base.upper()}/{quote.upper()}"
-        market_obj = exchange_obj.get_market(trading_pair)
+        market_obj = _get_market_or_render_error(exchange_obj, trading_pair)
 
         if market_obj is None:
-            console.print(
-                f"[bold red]Error: Trading pair {trading_pair} not found on "
-                f"{exchange_name}[/bold red]"
-            )
-            console.print("Try using the 'markets' command to see available pairs:")
-            console.print(
-                f"  pyccxt markets {exchange_name} --base {base.upper()} "
-                f"--quote {quote.upper()}"
-            )
             return
 
         # Refresh to get latest ticker data
@@ -149,6 +371,136 @@ def price(
     except Exception as e:
         console.print(f"[bold red]Error fetching price: {str(e)}[/bold red]")
         log.error(f"Error in price command: {e}", exc_info=True)
+
+
+@app.command()
+def chart(
+    base: str = typer.Argument(..., help="Base currency symbol"),
+    quote: str = typer.Argument(..., help="Quote currency symbol"),
+    market: str = typer.Option(None, "--market", "-m", help="Exchange to use"),
+    timeframe: str = typer.Option("1h", "--timeframe", "-t", help="OHLCV timeframe"),
+    limit: int = typer.Option(60, "--limit", "-l", help="Number of candles to fetch"),
+    since: int | None = typer.Option(None, "--since", help="UTC timestamp in ms"),
+    price_type: str = typer.Option(
+        "close",
+        "--price-type",
+        help="Series to plot: open, high, low, close, typical, median",
+    ),
+    height: int = typer.Option(20, "--height", help="ASCII chart height"),
+    inter_points_margin: int = typer.Option(
+        2,
+        "--inter-points-margin",
+        help="Horizontal spacing between points",
+    ),
+    table: bool = typer.Option(False, "--table", help="Show price data table"),
+):
+    """Render an ASCII chart from OHLCV-derived price data."""
+    try:
+        exchange_name = _resolve_exchange_name(market)
+        exchange_obj = Exchange(exchange_name=exchange_name)
+        symbol = f"{base.upper()}/{quote.upper()}"
+        market_obj = _get_market_or_render_error(exchange_obj, symbol)
+        if market_obj is None:
+            return
+
+        supports_ohlcv = _exchange_supports_ohlcv(exchange_obj)
+        if supports_ohlcv is False:
+            console.print(
+                f"[bold red]Error: Exchange {exchange_name} does not support OHLCV "
+                f"for {symbol} ({timeframe})[/bold red]"
+            )
+            return
+
+        success = market_obj.fetch_ohlc(timeframe=timeframe, since=since, limit=limit)
+        if not success:
+            _render_ohlcv_fetch_error(exchange_name, symbol, timeframe)
+            return
+
+        price_rows = market_obj.get_price_rows(price_type=price_type)
+        display_price_chart(
+            exchange_name=exchange_name,
+            symbol=symbol,
+            timeframe=timeframe,
+            price_type=price_type,
+            rows=price_rows,
+            height=height,
+            inter_points_margin=inter_points_margin,
+            show_table=table,
+        )
+    except RuntimeError as error:
+        console.print(f"[bold red]Error rendering chart: {error}[/bold red]")
+        log.error("Error rendering chart: %s", error)
+    except PyCCXTError as error:
+        _render_library_error("Error fetching chart data", error)
+    except Exception as e:
+        console.print(f"[bold red]Error fetching chart data: {str(e)}[/bold red]")
+        log.error("Error in chart command: %s", e, exc_info=True)
+
+
+@app.command()
+def ohlcv(
+    base: str = typer.Argument(..., help="Base currency symbol"),
+    quote: str = typer.Argument(..., help="Quote currency symbol"),
+    market: str = typer.Option(None, "--market", "-m", help="Exchange to use"),
+    timeframe: str = typer.Option("1h", "--timeframe", "-t", help="OHLCV timeframe"),
+    limit: int = typer.Option(60, "--limit", "-l", help="Number of candles to fetch"),
+    since: int | None = typer.Option(None, "--since", help="UTC timestamp in ms"),
+    plot_price: str = typer.Option(
+        "close",
+        "--plot-price",
+        help="OHLC field to plot: open, high, low, close, typical, median",
+    ),
+    height: int = typer.Option(20, "--height", help="ASCII chart height"),
+    inter_points_margin: int = typer.Option(
+        2,
+        "--inter-points-margin",
+        help="Horizontal spacing between points",
+    ),
+    table: bool = typer.Option(False, "--table", help="Show OHLCV table"),
+):
+    """Fetch OHLCV candles, render an ASCII chart, and optionally print a table."""
+    try:
+        exchange_name = _resolve_exchange_name(market)
+        exchange_obj = Exchange(exchange_name=exchange_name)
+        symbol = f"{base.upper()}/{quote.upper()}"
+        market_obj = _get_market_or_render_error(exchange_obj, symbol)
+        if market_obj is None:
+            return
+
+        supports_ohlcv = _exchange_supports_ohlcv(exchange_obj)
+        if supports_ohlcv is False:
+            console.print(
+                f"[bold red]Error: Exchange {exchange_name} does not support OHLCV "
+                f"for {symbol} ({timeframe})[/bold red]"
+            )
+            return
+
+        success = market_obj.fetch_ohlc(timeframe=timeframe, since=since, limit=limit)
+        if not success:
+            _render_ohlcv_fetch_error(exchange_name, symbol, timeframe)
+            return
+
+        ohlc_rows = market_obj.get_ohlcv_rows()
+        price_rows = market_obj.get_price_rows(price_type=plot_price)
+        display_ohlcv_chart(
+            exchange_name=exchange_name,
+            symbol=symbol,
+            timeframe=timeframe,
+            plot_price=plot_price,
+            ohlc_rows=ohlc_rows,
+            price_rows=price_rows,
+            height=height,
+            inter_points_margin=inter_points_margin,
+            show_table=table,
+        )
+    except RuntimeError as error:
+        console.print(f"[bold red]Error rendering OHLCV chart: {error}[/bold red]")
+        log.error("Error rendering OHLCV chart: %s", error)
+    except PyCCXTError as error:
+        _render_library_error("Error fetching OHLCV data", error)
+    except Exception as e:
+        console.print(f"[bold red]Error fetching OHLCV data: {str(e)}[/bold red]")
+        log.error("Error in ohlcv command: %s", e, exc_info=True)
 
 
 @app.command()
@@ -467,7 +819,7 @@ def exchanges(  # noqa: C901
             )
 
         # Filter by market if base or quote currency is specified
-        exchange_market_pairs = {}
+        exchange_market_pairs: dict[str, list[str]] = {}
         if base_currency or quote_currency:
             console.print("[bold]Filtering exchanges with market pairs...[/bold]")
             with console.status(

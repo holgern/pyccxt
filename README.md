@@ -69,6 +69,12 @@ if market:
 # Get price for a trading pair
 pyccxt price BTC USD --market binance
 
+# Render an OHLCV-derived ASCII chart
+pyccxt chart BTC USDT --market kraken --timeframe 1h --limit 60
+
+# Fetch OHLCV candles and print the table
+pyccxt ohlcv BTC USDT --market kraken --timeframe 4h --limit 90 --table
+
 # Show market volumes
 pyccxt volume --market binance --limit 10
 
@@ -141,6 +147,26 @@ pyccxt volume --market coinbase --quote USD --normalize-to USD --limit 15
 # Compare volumes across exchanges
 pyccxt volume --market binance,kraken,coinbase --base BTC --compare --normalize-to USD
 ```
+
+### Chart Commands
+
+```bash
+# Plot close prices derived from fetched OHLCV candles
+pyccxt chart BTC USDT --market kraken --timeframe 1h --limit 60
+
+# Plot a different OHLC-derived series and print the underlying price rows
+pyccxt chart ETH USD --market coinbase --timeframe 15m --limit 80 --price-type high --table
+
+# Fetch candles, render a close-price plot, and print OHLCV rows
+pyccxt ohlcv BTC USDT --market kraken --timeframe 4h --limit 90 --table
+
+# Plot the typical price while keeping candle output optional
+pyccxt ohlcv ETH EUR --market kraken --timeframe 1d --limit 30 --plot-price typical
+```
+
+- `chart` fetches OHLCV data first and plots one derived price series.
+- `ohlcv` uses the same OHLCV fetch path, plots one selected series, and can print full candle rows.
+- `--table` prints the underlying rows used by each command.
 
 ### Exchange Commands
 

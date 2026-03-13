@@ -20,6 +20,7 @@ dependencies = [
     "rich",
     "requests",
     "ccxt>=4.5.42",
+    "asciiplot",
 ]
 license = {file = "LICENSE"}
 classifiers=[

@@ -163,21 +163,18 @@ class Market:
             else:
                 return False
 
-            if ohlcv and len(ohlcv) > 0:
-                # Create OHLCVCollection
+            if ohlcv is not None:
                 ohlcv_collection = OHLCVCollection(self.symbol, timeframe)
 
                 for entry in ohlcv:
                     timestamp = entry[0]
                     open_price, high_price, low_price, close_price, volume = entry[1:6]
 
-                    # Apply precision formatting if available
                     open_price = self.format_price_to_precision(open_price)
                     high_price = self.format_price_to_precision(high_price)
                     low_price = self.format_price_to_precision(low_price)
                     close_price = self.format_price_to_precision(close_price)
 
-                    # Create OHLC instance
                     ohlc_candle = OHLC(
                         timestamp=timestamp,
                         open_price=open_price,
@@ -191,14 +188,13 @@ class Market:
 
                     ohlcv_collection.add_ohlc(ohlc_candle)
 
-                # Store the results
                 self._ohlc_data = ohlcv_collection
                 self._ohlc_timeframe = timeframe
                 return True
-            else:
-                self._ohlc_data = None
-                self._ohlc_timeframe = None
-                return False
+
+            self._ohlc_data = None
+            self._ohlc_timeframe = None
+            return False
 
         except Exception as e:
             logger.error(f"Error fetching OHLC data for {self.symbol}: {e}")
@@ -421,7 +417,7 @@ class Market:
 
     def get_ohlc_latest(self) -> Optional[dict[str, Any]]:
         """Get the latest OHLC data."""
-        if not self._ohlc_data:
+        if self._ohlc_data is None:
             self.fetch_ohlc()
 
         if self._ohlc_data and len(self._ohlc_data) > 0:
@@ -438,7 +434,7 @@ class Market:
 
     def get_ohlc_history(self) -> Optional[list[dict[str, Any]]]:
         """Get the complete OHLC history."""
-        if not self._ohlc_data:
+        if self._ohlc_data is None:
             self.fetch_ohlc()
 
         if self._ohlc_data:
@@ -464,7 +460,7 @@ class Market:
         Returns:
             OHLCVCollection instance or None if no data available
         """
-        if not self._ohlc_data:
+        if self._ohlc_data is None:
             self.fetch_ohlc()
         return self._ohlc_data
 
@@ -475,7 +471,7 @@ class Market:
         Returns:
             Latest OHLC instance or None if no data available
         """
-        if not self._ohlc_data:
+        if self._ohlc_data is None:
             self.fetch_ohlc()
 
         if self._ohlc_data and len(self._ohlc_data) > 0:
@@ -489,10 +485,46 @@ class Market:
         Returns:
             OHLCVCollection instance or None if not using collection format
         """
-        if not self._ohlc_data:
+        if self._ohlc_data is None:
             self.fetch_ohlc()
 
         return self._ohlc_data
+
+    def get_price_rows(self, price_type: str = "close") -> list[dict[str, Any]]:
+        """Get normalized price rows from fetched OHLCV data."""
+        collection = self.get_ohlcv_collection()
+        if collection is None:
+            return []
+        return collection.get_price_list(price_type=price_type)
+
+    def get_ohlcv_rows(self) -> list[dict[str, Any]]:
+        """Get normalized OHLCV rows from fetched candle data."""
+        collection = self.get_ohlcv_collection()
+        if collection is None:
+            return []
+
+        rows: list[dict[str, Any]] = []
+        for ohlc in collection.get_ohlc_data():
+            rows.append(
+                {
+                    "timestamp": ohlc.timestamp,
+                    "datetime": ohlc.datetime,
+                    "open": ohlc.open,
+                    "high": ohlc.high,
+                    "low": ohlc.low,
+                    "close": ohlc.close,
+                    "volume": ohlc.volume,
+                    "symbol": ohlc.symbol or self.symbol,
+                    "timeframe": ohlc.timeframe or self._ohlc_timeframe,
+                }
+            )
+
+        rows.sort(
+            key=lambda row: (
+                row["timestamp"] if isinstance(row.get("timestamp"), int) else 0
+            )
+        )
+        return rows
 
     def get_formatted_price_list(
         self, price_type: str = "close"
@@ -507,11 +539,7 @@ class Market:
         Returns:
             List of dictionaries with timestamp and price data
         """
-        collection = self.get_ohlcv_collection()
-        if collection:
-            return collection.get_price_list(price_type)
-
-        return []
+        return self.get_price_rows(price_type=price_type)
 
     def get_price_range_analysis(self) -> dict[str, Any]:
         """
@@ -556,7 +584,7 @@ class Market:
 
     def get_price_history(self) -> list[dict[str, Any]]:
         """Get historical price data generated from OHLC data."""
-        if not self._ohlc_data:
+        if self._ohlc_data is None:
             self.fetch_ohlc()
 
         if not self._ohlc_data:

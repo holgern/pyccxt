@@ -155,8 +155,11 @@ class OHLCVCollection:
                 else:
                     timestamp = datetime.now(timezone.utc)
 
+                raw_timestamp = getattr(ohlc, "timestamp", None)
+
                 price_entry = {
                     "timestamp": timestamp,
+                    "timestamp_ms": raw_timestamp,
                     "price": price,
                     "symbol": self.symbol,
                     "timeframe": self.timeframe,
@@ -172,6 +175,12 @@ class OHLCVCollection:
             except Exception as e:
                 logger.error(f"Error processing OHLC data for price list: {e}")
                 continue
+
+        price_list.sort(
+            key=lambda row: (
+                row["timestamp_ms"] if isinstance(row.get("timestamp_ms"), int) else 0
+            )
+        )
 
         # Cache close prices
         if price_type == "close":
