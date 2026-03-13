@@ -1,4 +1,3 @@
-import importlib
 import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional
@@ -11,10 +10,6 @@ if TYPE_CHECKING:
     from .exchange import Exchange
 
 logger = logging.getLogger(__name__)
-
-
-def _import_ccxt() -> Any:
-    return importlib.import_module("ccxt")
 
 
 class Market:
@@ -592,23 +587,11 @@ class Market:
         Returns:
             The formatted price
         """
-        if not isinstance(price, (int, float)):
-            return price
-
-        precision = self.market_info.get("precision", {}).get("price")
-        if precision is not None and isinstance(precision, (int, float)):
-            exchange = self.exchange.ccxt_exchange
-            if exchange is not None and hasattr(exchange, "precisionMode"):
-                ccxt = _import_ccxt()
-                if exchange.precisionMode == ccxt.TICK_SIZE:
-                    return round(price / precision) * precision
-                elif exchange.precisionMode == ccxt.SIGNIFICANT_DIGITS:
-                    format_str = f"{{:.{int(precision)}g}}"
-                    return float(format_str.format(price))
-                else:
-                    format_str = f"{{:.{int(precision)}f}}"
-                    return float(format_str.format(price))
-        return price
+        return self._format_to_precision(
+            value=price,
+            method_name="price_to_precision",
+            precision_key="price",
+        )
 
     def format_amount_to_precision(self, amount: float) -> float:
         """
@@ -620,23 +603,63 @@ class Market:
         Returns:
             The formatted amount
         """
-        if not isinstance(amount, (int, float)):
-            return amount
+        return self._format_to_precision(
+            value=amount,
+            method_name="amount_to_precision",
+            precision_key="amount",
+        )
 
-        precision = self.market_info.get("precision", {}).get("amount")
-        if precision is not None and isinstance(precision, (int, float)):
-            exchange = self.exchange.ccxt_exchange
-            if exchange is not None and hasattr(exchange, "precisionMode"):
-                ccxt = _import_ccxt()
-                if exchange.precisionMode == ccxt.TICK_SIZE:
-                    return round(amount / precision) * precision
-                elif exchange.precisionMode == ccxt.SIGNIFICANT_DIGITS:
-                    format_str = f"{{:.{int(precision)}g}}"
-                    return float(format_str.format(amount))
-                else:
-                    format_str = f"{{:.{int(precision)}f}}"
-                    return float(format_str.format(amount))
-        return amount
+    def _format_to_precision(
+        self,
+        value: float,
+        method_name: str,
+        precision_key: str,
+    ) -> float:
+        """Format a numeric value using CCXT-native precision helpers when available."""
+        if not isinstance(value, (int, float)):
+            return value
+
+        exchange = self.exchange.ccxt_exchange
+        if exchange is not None:
+            formatter = getattr(exchange, method_name, None)
+            if callable(formatter):
+                try:
+                    formatted_value = formatter(self.symbol, value)
+                    if isinstance(formatted_value, str):
+                        return float(formatted_value)
+                    if isinstance(formatted_value, (int, float)):
+                        return float(formatted_value)
+                except Exception as exc:
+                    logger.debug(
+                        "CCXT %s failed for %s on %s: %s",
+                        method_name,
+                        self.symbol,
+                        self.exchange.name,
+                        exc,
+                    )
+
+        return self._fallback_format_to_precision(value, precision_key)
+
+    def _fallback_format_to_precision(self, value: float, precision_key: str) -> float:
+        """Apply a minimal local precision fallback.
+
+        Used when CCXT precision helpers are unavailable.
+        """
+        if not isinstance(value, (int, float)):
+            return value
+
+        precision = self.market_info.get("precision", {}).get(precision_key)
+        if not isinstance(precision, (int, float)):
+            return value
+
+        if isinstance(precision, float) and precision > 0 and precision < 1:
+            return round(value / precision) * precision
+
+        if precision >= 0:
+            format_str = f"{{:.{int(precision)}f}}"
+            return float(format_str.format(value))
+
+        return value
 
     def get_market_info(self) -> dict[str, Any]:
         """Get market metadata."""
