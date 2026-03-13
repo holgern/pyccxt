@@ -544,14 +544,14 @@ def markets(
                 sort_by=sort_by,
             )
 
-            exchange_name = Exchanges.get_exchange_name(str(exchange_id))
+            exchange_instance = Exchanges.get_exchange_instance(str(exchange_id))
 
             # Apply limit if specified
             if limit > 0:
                 filtered_markets = filtered_markets[:limit]
 
             # Create table
-            table = Table(title=f"Markets on {exchange_name}")
+            table = Table(title=f"Markets on {exchange_instance.name}")
             table.add_column("Symbol", style="cyan")
             table.add_column("Base", style="green")
             table.add_column("Quote", style="yellow")

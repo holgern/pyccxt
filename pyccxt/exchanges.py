@@ -4,41 +4,11 @@ import importlib
 import logging
 from typing import Any
 
-import requests
-
 log = logging.getLogger(__name__)
-
-_KRAKEN_MARKETS_URL = "https://api.kraken.com/0/public/AssetPairs"
-_EXCHANGE_DISPLAY_NAMES = {
-    "kraken": "Kraken",
-}
-_CURRENCY_ALIASES = {
-    "XBT": "BTC",
-    "XDG": "DOGE",
-}
 
 
 def _import_ccxt() -> Any:
     return importlib.import_module("ccxt")
-
-
-def _is_ccxt_import_error(exc: Exception) -> bool:
-    return (
-        isinstance(exc, ModuleNotFoundError)
-        and bool(exc.name)
-        and exc.name.startswith("ccxt")
-    )
-
-
-def _normalize_currency_code(currency: str | None) -> str:
-    if not currency:
-        return ""
-
-    normalized = currency.upper()
-    while len(normalized) > 3 and normalized.startswith(("X", "Z")):
-        normalized = normalized[1:]
-
-    return _CURRENCY_ALIASES.get(normalized, normalized)
 
 
 def _sort_markets(markets: list[dict[str, Any]], sort_by: str) -> list[dict[str, Any]]:
@@ -82,10 +52,6 @@ class Exchanges:
             list[str]: List of exchange IDs
         """
         return _import_ccxt().exchanges
-
-    @staticmethod
-    def get_exchange_name(exchange_id: str) -> str:
-        return _EXCHANGE_DISPLAY_NAMES.get(exchange_id.lower(), exchange_id)
 
     @staticmethod
     def get_exchange_instance(exchange_id: str) -> Any:
@@ -259,80 +225,5 @@ class Exchanges:
             return _sort_markets(filtered_markets, sort_by)
 
         except Exception as e:
-            if _is_ccxt_import_error(e):
-                log.info(
-                    "ccxt import failed for %s, falling back to public API: %s",
-                    exchange_id,
-                    e,
-                )
-                return Exchanges._get_exchange_markets_fallback(
-                    exchange_id=exchange_id,
-                    base_currency=base_currency,
-                    quote_currency=quote_currency,
-                    active_only=active_only,
-                    sort_by=sort_by,
-                )
-
             log.error(f"Error getting markets for {exchange_id}: {e}")
             raise
-
-    @staticmethod
-    def _get_exchange_markets_fallback(
-        exchange_id: str,
-        base_currency: str | None = None,
-        quote_currency: str | None = None,
-        active_only: bool = False,
-        sort_by: str = "symbol",
-    ) -> list[dict[str, Any]]:
-        if exchange_id.lower() != "kraken":
-            raise RuntimeError(
-                f"Could not import ccxt, and no public API fallback is available for "
-                f"'{exchange_id}'."
-            )
-
-        response = requests.get(_KRAKEN_MARKETS_URL, timeout=30)
-        response.raise_for_status()
-        payload = response.json()
-
-        errors = payload.get("error", [])
-        if errors:
-            raise RuntimeError(f"Kraken API returned errors: {', '.join(errors)}")
-
-        results = payload.get("result", {})
-        filtered_markets = []
-
-        for market_id, market in results.items():
-            base = _normalize_currency_code(market.get("base"))
-            quote = _normalize_currency_code(market.get("quote"))
-            active = market.get("status", "online") == "online"
-
-            if active_only and not active:
-                continue
-            if base_currency and base != base_currency.upper():
-                continue
-            if quote_currency and quote != quote_currency.upper():
-                continue
-
-            filtered_markets.append(
-                {
-                    "id": market_id,
-                    "symbol": f"{base}/{quote}",
-                    "base": base,
-                    "quote": quote,
-                    "active": active,
-                    "spot": True,
-                    "margin": bool(
-                        market.get("margin_call") is not None
-                        or market.get("buy_leverage")
-                        or market.get("sell_leverage")
-                    ),
-                    "future": False,
-                    "precision": {
-                        "price": market.get("pair_decimals"),
-                        "amount": market.get("lot_decimals"),
-                    },
-                    "info": market,
-                }
-            )
-
-        return _sort_markets(filtered_markets, sort_by)
