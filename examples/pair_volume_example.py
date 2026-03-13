@@ -60,7 +60,7 @@ def display_pair_volumes(base_currency="BTC", quote_currency="EUR", max_exchange
         # Get values with defaults for None
         base_volume = result.get("baseVolume", 0)
         quote_volume = result.get("quoteVolume", 0)
-        last_price = result.get("last", 0)
+        last_price = result.get("price", 0)
 
         # Format volumes with appropriate precision
         base_vol = f"{base_volume:,.2f}" if base_volume >= 1 else f"{base_volume:.8f}"

@@ -612,7 +612,11 @@ class Exchange:
 
 
 def get_market_volumes_for_pair(
-    base_currency: str, quote_currency: str, max_exchanges: int = 15, timeout: int = 30
+    base_currency: str,
+    quote_currency: str,
+    max_exchanges: int = 15,
+    timeout: int = 30,
+    exchange_ids: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """
     Get the volume for a specific trading pair across all supported exchanges.
@@ -622,10 +626,10 @@ def get_market_volumes_for_pair(
         quote_currency: The quote currency (e.g., 'EUR')
         max_exchanges: Maximum number of exchanges to check (default: 15)
         timeout: Timeout in seconds for each exchange request (default: 30)
+        exchange_ids: Specific exchange ids to query instead of all exchanges.
 
     Returns:
-        List of dictionaries containing exchange name, volume, and other details,
-        sorted by volume in descending order.
+        List of standardized market volume rows sorted by normalized volume.
     """
     # Normalize currency codes
     base = base_currency.upper()
@@ -633,8 +637,15 @@ def get_market_volumes_for_pair(
     symbol = f"{base}/{quote}"
 
     # Get all available exchanges
-    ccxt = _import_ccxt()
-    exchanges = [ex for ex in ccxt.exchanges if not ex.startswith("_")]
+    if exchange_ids is not None:
+        exchanges = [
+            exchange_id
+            for exchange_id in exchange_ids
+            if not exchange_id.startswith("_")
+        ]
+    else:
+        ccxt = _import_ccxt()
+        exchanges = [ex for ex in ccxt.exchanges if not ex.startswith("_")]
 
     # Limit the number of exchanges to avoid excessive API calls
     if max_exchanges and max_exchanges > 0:
@@ -642,35 +653,57 @@ def get_market_volumes_for_pair(
 
     results = []
 
-    def fetch_exchange_volume(exchange_id):
-        """Fetch volume for a specific exchange"""
+    def build_result(
+        exchange_id: str,
+        market_symbol: str,
+        volume_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        actual_quote = str(volume_data.get("quote") or "").upper() or None
+        normalized_volume = volume_data.get("quoteVolume")
+        normalized_currency = actual_quote
+        is_normalized = actual_quote == quote
+
+        return {
+            "exchange": exchange_id,
+            "symbol": market_symbol,
+            "base": str(volume_data.get("base") or base),
+            "quote": actual_quote or quote,
+            "price": volume_data.get("price"),
+            "baseVolume": volume_data.get("baseVolume"),
+            "quoteVolume": volume_data.get("quoteVolume"),
+            "normalizedVolume": normalized_volume,
+            "normalizedCurrency": normalized_currency,
+            "isNormalized": is_normalized,
+            "timestamp": volume_data.get("timestamp"),
+            "datetime": volume_data.get("datetime"),
+        }
+
+    def fetch_exchange_volume(exchange_id: str) -> dict[str, Any] | None:
+        """Fetch volume for a specific exchange."""
         try:
             exchange = Exchange(exchange_id, timeout=timeout * 1000)
-            if exchange.ccxt_exchange is None:
-                return None
 
             market = exchange.get_market(symbol)
+            matched_symbol = symbol
             if market is None:
                 # Try alternative symbol formats
                 if quote == "USD" and exchange.get_market(f"{base}/USDT"):
                     market = exchange.get_market(f"{base}/USDT")
+                    matched_symbol = f"{base}/USDT"
                 elif quote == "USDT" and exchange.get_market(f"{base}/USD"):
                     market = exchange.get_market(f"{base}/USD")
+                    matched_symbol = f"{base}/USD"
                 else:
                     return None
 
             if market:
                 volume_data = market.get_volume()
-                if volume_data and volume_data.get("baseVolume", 0) > 0:
-                    return {
-                        "exchange": exchange_id,
-                        "symbol": volume_data["symbol"],
-                        "baseVolume": volume_data["baseVolume"],
-                        "quoteVolume": volume_data["quoteVolume"],
-                        "last": volume_data["price"],
-                        "timestamp": volume_data["timestamp"],
-                        "datetime": volume_data["datetime"],
-                    }
+                if volume_data and isinstance(
+                    volume_data.get("baseVolume"), (int, float)
+                ):
+                    if float(volume_data["baseVolume"]) <= 0:
+                        return None
+                    return build_result(exchange_id, matched_symbol, volume_data)
             return None
         except Exception as e:
             logger.debug(f"Error fetching volume for {exchange_id}: {str(e)}")
@@ -691,10 +724,7 @@ def get_market_volumes_for_pair(
             except Exception as e:
                 logger.debug(f"Error processing result for {exchange_id}: {str(e)}")
 
-    # Filter out results with None volumes and sort by quote volume in descending order
-    valid_results = [
-        r for r in results if r and isinstance(r.get("quoteVolume", 0), (int, float))
-    ]
-    valid_results.sort(key=lambda x: float(x.get("quoteVolume", 0)), reverse=True)
+    valid_results = [r for r in results if r is not None]
+    valid_results.sort(key=_volume_sort_key, reverse=True)
 
     return valid_results

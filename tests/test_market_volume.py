@@ -216,9 +216,122 @@ class TestExchange(unittest.TestCase):
 class TestMarketVolumesCrossExchange(unittest.TestCase):
     """Test cases for cross-exchange volume comparison."""
 
-    def test_get_market_volumes_for_pair(self):
-        """Test getting volumes for a pair across exchanges."""
-        self.assertTrue(callable(get_market_volumes_for_pair))
+    @patch("pyccxt.exchange.Exchange")
+    @patch("pyccxt.exchange._import_ccxt")
+    def test_get_market_volumes_for_pair_returns_standardized_rows(
+        self, mock_import_ccxt, mock_exchange_class
+    ):
+        """Test getting standardized market volumes for a pair across exchanges."""
+
+        class FakeMarket:
+            def __init__(self, volume_data):
+                self._volume_data = volume_data
+
+            def get_volume(self):
+                return self._volume_data
+
+        class FakeExchange:
+            def __init__(self, markets):
+                self.ccxt_exchange = object()
+                self._markets = markets
+
+            def get_market(self, symbol):
+                return self._markets.get(symbol)
+
+        mock_import_ccxt.return_value = SimpleNamespace(
+            exchanges=["binance", "coinbase", "kraken", "ignored"]
+        )
+
+        exchanges = {
+            "binance": FakeExchange(
+                {
+                    "BTC/USDT": FakeMarket(
+                        {
+                            "symbol": "BTC/USDT",
+                            "base": "BTC",
+                            "quote": "USDT",
+                            "price": 30000.0,
+                            "baseVolume": 10.0,
+                            "quoteVolume": 300000.0,
+                            "timestamp": 1,
+                            "datetime": "2021-07-01T00:00:00.000Z",
+                        }
+                    )
+                }
+            ),
+            "coinbase": FakeExchange(
+                {
+                    "BTC/USDT": FakeMarket(
+                        {
+                            "symbol": "BTC/USDT",
+                            "base": "BTC",
+                            "quote": "USDT",
+                            "price": 30100.0,
+                            "baseVolume": 12.0,
+                            "quoteVolume": 361200.0,
+                            "timestamp": 2,
+                            "datetime": "2021-07-01T00:01:00.000Z",
+                        }
+                    )
+                }
+            ),
+            "kraken": FakeExchange(
+                {
+                    "BTC/USD": FakeMarket(
+                        {
+                            "symbol": "BTC/USD",
+                            "base": "BTC",
+                            "quote": "USD",
+                            "price": 29950.0,
+                            "baseVolume": 8.0,
+                            "quoteVolume": 239600.0,
+                            "timestamp": 3,
+                            "datetime": "2021-07-01T00:02:00.000Z",
+                        }
+                    )
+                }
+            ),
+            "ignored": FakeExchange({}),
+        }
+
+        mock_exchange_class.side_effect = lambda exchange_id, timeout: exchanges[
+            exchange_id
+        ]
+
+        results = get_market_volumes_for_pair(
+            "BTC",
+            "USDT",
+            exchange_ids=["binance", "coinbase", "kraken", "ignored"],
+        )
+
+        self.assertEqual(
+            [row["exchange"] for row in results],
+            ["coinbase", "binance", "kraken"],
+        )
+        self.assertEqual(results[0]["normalizedVolume"], 361200.0)
+        self.assertEqual(results[0]["normalizedCurrency"], "USDT")
+        self.assertTrue(results[0]["isNormalized"])
+        self.assertEqual(results[2]["symbol"], "BTC/USD")
+        self.assertEqual(results[2]["normalizedCurrency"], "USD")
+        self.assertFalse(results[2]["isNormalized"])
+        self.assertNotIn("volume", results[0])
+        self.assertEqual(
+            set(results[0].keys()),
+            {
+                "exchange",
+                "symbol",
+                "base",
+                "quote",
+                "price",
+                "baseVolume",
+                "quoteVolume",
+                "normalizedVolume",
+                "normalizedCurrency",
+                "isNormalized",
+                "timestamp",
+                "datetime",
+            },
+        )
 
 
 if __name__ == "__main__":
