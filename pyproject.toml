@@ -41,6 +41,9 @@ dynamic=["version"]
 [tool.setuptools_scm]
 write_to = "pyccxt/_version.py"
 
+[tool.ruff.lint]
+ignore = ["UP045"]
+
 [project.scripts]
 pyccxt = "pyccxt.cli:app"
 

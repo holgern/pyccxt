@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, TypedDict
+from typing import Any, Optional, TypedDict
 
 import typer
 from rich.console import Console
@@ -32,7 +32,7 @@ def _render_library_error(prefix: str, error: PyCCXTError) -> None:
     log.error("%s: %s", prefix, error)
 
 
-def _format_optional_number(value: float | None, precision: int = 4) -> str:
+def _format_optional_number(value: Optional[float], precision: int = 4) -> str:  # noqa: UP045
     """Format optional numeric values for terminal output."""
     if value is None:
         return "N/A"
@@ -86,7 +86,7 @@ def _format_numeric_value(value: object, precision: int = 4) -> str:
     return str(value)
 
 
-def _resolve_exchange_name(market: str | None) -> str:
+def _resolve_exchange_name(market: Optional[str]) -> str:  # noqa: UP045
     """Resolve the exchange name from explicit option or CLI state."""
     return market if market else state["market"]
 
@@ -113,7 +113,9 @@ def _get_market_or_render_error(exchange_obj: Exchange, symbol: str):
     return market_obj
 
 
-def _exchange_supports_ohlcv(exchange_obj: Exchange) -> bool | None:
+def _exchange_supports_ohlcv(  # noqa: UP045
+    exchange_obj: Exchange,
+) -> Optional[bool]:  # noqa: UP045
     """Return OHLCV support if the exchange exposes capability metadata."""
     ccxt_exchange = getattr(exchange_obj, "ccxt_exchange", None)
     has = getattr(ccxt_exchange, "has", None)
@@ -380,7 +382,9 @@ def chart(
     market: str = typer.Option(None, "--market", "-m", help="Exchange to use"),
     timeframe: str = typer.Option("1h", "--timeframe", "-t", help="OHLCV timeframe"),
     limit: int = typer.Option(60, "--limit", "-l", help="Number of candles to fetch"),
-    since: int | None = typer.Option(None, "--since", help="UTC timestamp in ms"),
+    since: Optional[int] = typer.Option(  # noqa: UP045
+        None, "--since", help="UTC timestamp in ms"
+    ),
     price_type: str = typer.Option(
         "close",
         "--price-type",
@@ -444,7 +448,9 @@ def ohlcv(
     market: str = typer.Option(None, "--market", "-m", help="Exchange to use"),
     timeframe: str = typer.Option("1h", "--timeframe", "-t", help="OHLCV timeframe"),
     limit: int = typer.Option(60, "--limit", "-l", help="Number of candles to fetch"),
-    since: int | None = typer.Option(None, "--since", help="UTC timestamp in ms"),
+    since: Optional[int] = typer.Option(  # noqa: UP045
+        None, "--since", help="UTC timestamp in ms"
+    ),
     plot_price: str = typer.Option(
         "close",
         "--plot-price",
@@ -508,10 +514,10 @@ def volume(
     markets: str = typer.Option(
         "kraken", "--market", "-m", help="Exchange(s) to use (comma-separated list)"
     ),
-    base_currency: str | None = typer.Option(
+    base_currency: Optional[str] = typer.Option(  # noqa: UP045
         None, "--base", "-b", help="Filter by market base currency"
     ),
-    quote_currency: str | None = typer.Option(
+    quote_currency: Optional[str] = typer.Option(  # noqa: UP045
         None, "--quote", "-q", help="Filter by market quote currency"
     ),
     normalize_to: str = typer.Option(

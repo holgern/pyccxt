@@ -165,7 +165,8 @@ pyccxt ohlcv ETH EUR --market kraken --timeframe 1d --limit 30 --plot-price typi
 ```
 
 - `chart` fetches OHLCV data first and plots one derived price series.
-- `ohlcv` uses the same OHLCV fetch path, plots one selected series, and can print full candle rows.
+- `ohlcv` uses the same OHLCV fetch path, plots one selected series, and can print full
+  candle rows.
 - `--table` prints the underlying rows used by each command.
 
 ### Exchange Commands
